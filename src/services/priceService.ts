@@ -486,7 +486,6 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://torob.com/search/?query=${encodedQuery}`;
   const apiUrl = `https://api.torob.com/v4/base-product/search/?query=${encodedQuery}&page=0&size=10`;
-
   const response = await axios.get(apiUrl, {
     headers: torobHeaders,
     timeout: DEFAULT_TIMEOUT_MS,
@@ -498,22 +497,47 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
   }
 
   const items = parsedData.data.results;
-  process.stderr.write(`[Torob] Found ${items.length} items for "${query}"\n`);
-
-  const relevantItems = items.filter((item) => {
-    const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim();
-    return isRelevantProduct(fullTitle, query);
+  process.stderr.write(`[Torob] Found ${items.length} items for "${query}":\n`);
+  items.forEach((it, idx) => {
+    const fullTitle = `${it.name1 || ''} ${it.name2 || ''}`.trim();
+    process.stderr.write(
+      `  [${idx + 1}] ${fullTitle.slice(0, 45)}... -> ${it.price || 0} Toman (${it.stock_status || 'available'})\n`
+    );
   });
 
-  if (relevantItems.length === 0) {
-    return null;
+  const primaryTokens = query
+    .toLowerCase()
+    .split(/[\s\-_\/]+/)
+    .filter((t) => t.length > 1);
+
+  // Filter items matching any primary keyword or title relevance
+  const relevantItems = items.filter((item) => {
+    const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim().toLowerCase();
+    const matchesToken = primaryTokens.some((token) => fullTitle.includes(token));
+    return matchesToken && isRelevantProduct(fullTitle, query) && (item.price || 0) > 0;
+  });
+
+  // Pick FIRST item that is BOTH relevant and IN STOCK (price > 0 and stock_status !== 'unavailable')
+  let selectedItem: (typeof items)[number] | undefined =
+    relevantItems.find((i) => (i.price || 0) > 0 && i.stock_status !== 'unavailable') ||
+    relevantItems[0];
+
+  // Fallback: If no strict match, find any item in Torob results matching primary tokens
+  if (!selectedItem) {
+    selectedItem = items.find((item) => {
+      const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim().toLowerCase();
+      return (
+        primaryTokens.some((token) => fullTitle.includes(token)) &&
+        (item.price || 0) > 0 &&
+        item.stock_status !== 'unavailable'
+      );
+    });
   }
 
-  // Find FIRST item that is BOTH relevant and IN STOCK (price > 0 and stock_status !== 'unavailable')
-  const inStockItem = relevantItems.find(
-    (i) => (i.price || 0) > 0 && i.stock_status !== 'unavailable'
-  );
-  const selectedItem = inStockItem || relevantItems[0];
+  if (!selectedItem) {
+    process.stderr.write(`[Torob] No items matched primary tokens for "${query}"\n`);
+    return null;
+  }
 
   const title = selectedItem.name1 || selectedItem.name2 || query;
   const priceInTomans = selectedItem.price || 0;
@@ -596,8 +620,10 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://www.technolife.ir/product/search?keyword=${encodedQuery}`;
 
-  const primaryUrl = `https://api.technolife.ir/api/v1/product/search?keyword=${encodedQuery}&page=1`;
-  const fallbackApiUrl = `https://www.technolife.ir/api/product/search?keyword=${encodedQuery}`;
+  // Use plural 'products' endpoint
+  const primaryUrl = `https://www.technolife.ir/api/v1/products/search?keyword=${encodedQuery}&page=1`;
+  const fallbackApiUrl = `https://api.technolife.ir/api/v1/products/search?keyword=${encodedQuery}`;
+  const legacyApiUrl = `https://www.technolife.ir/api/product/search?keyword=${encodedQuery}`;
 
   let responseData: any = null;
 
@@ -609,18 +635,26 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
     });
     responseData = response.data;
   } catch (primaryErr: any) {
-    // If primary returns error, try fallback endpoint
+    // If primary returns error, try fallback endpoints
     try {
       const response = await axios.get(fallbackApiUrl, {
         headers: technolifeHeaders,
         timeout: DEFAULT_TIMEOUT_MS,
       });
       responseData = response.data;
-    } catch (fallbackErr: any) {
-      process.stderr.write(
-        `[Technolife] Search endpoint unavailable or returned 404 (status: ${primaryErr?.response?.status || fallbackErr?.response?.status || 'network error'})\n`
-      );
-      return null;
+    } catch {
+      try {
+        const response = await axios.get(legacyApiUrl, {
+          headers: technolifeHeaders,
+          timeout: DEFAULT_TIMEOUT_MS,
+        });
+        responseData = response.data;
+      } catch (fallbackErr: any) {
+        process.stderr.write(
+          `[Technolife] Search endpoint unavailable or returned 404 (status: ${primaryErr?.response?.status || fallbackErr?.response?.status || 'network error'})\n`
+        );
+        return null;
+      }
     }
   }
 
@@ -659,11 +693,7 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
     return isRelevantProduct(fullTitle, query);
   });
 
-  if (relevantProducts.length === 0) {
-    return null;
-  }
-
-  // Find FIRST product that is BOTH relevant and IN STOCK
+  // Find FIRST product that is BOTH relevant and IN STOCK (or fallback to first item)
   const inStockProduct = relevantProducts.find((p) => {
     const rawPrice = p.price || p.selling_price || p.discounted_price || 0;
     const numPrice =
@@ -671,7 +701,11 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
     return (p.is_available ?? p.available ?? p.in_stock ?? true) && numPrice > 0;
   });
 
-  const selectedProduct = inStockProduct || relevantProducts[0];
+  const selectedProduct = inStockProduct || relevantProducts[0] || products[0];
+  if (!selectedProduct) {
+    return null;
+  }
+
   const title =
     selectedProduct.title || selectedProduct.name || selectedProduct.product_name || query;
 
