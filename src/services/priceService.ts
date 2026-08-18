@@ -18,7 +18,7 @@ export interface ProductResult {
 }
 
 /**
- * Common HTTP request configuration.
+ * Modern browser HTTP request configuration.
  */
 const DEFAULT_TIMEOUT_MS = 7000;
 const USER_AGENT =
@@ -26,8 +26,15 @@ const USER_AGENT =
 
 const baseHeaders = {
   'User-Agent': USER_AGENT,
-  'Accept-Language': 'fa-IR,fa;q=0.9',
   'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Referer': 'https://www.google.com/',
+  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'cross-site',
 };
 
 /**
@@ -45,6 +52,113 @@ export function formatTomanPrice(price: number): string {
   const formattedWithCommas = Math.round(price).toLocaleString('en-US');
   const persianDigitsWithCommas = toPersianDigits(formattedWithCommas);
   return `${persianDigitsWithCommas} تومان`;
+}
+
+/**
+ * Common accessory keywords to avoid matching when searching for main devices.
+ */
+const ACCESSORY_KEYWORDS = [
+  'گلس',
+  'محافظ صفحه',
+  'محافظ لنز',
+  'کاور',
+  'قاب',
+  'کیف',
+  'بند',
+  'استیکر',
+  'برچسب',
+  'شارژر',
+  'کابل',
+  'پد',
+  'پایه',
+  'هولدر',
+  'تبدیل',
+  'سلفی',
+  'اسکین',
+  'آستین',
+  'screen protector',
+  'case',
+  'cover',
+  'strap',
+  'sleeve',
+  'adapter',
+  'cable',
+  'film',
+  'skin',
+];
+
+/**
+ * Normalizes Persian/Arabic characters and English terms for accurate string matching.
+ */
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[ي]/g, 'ی')
+    .replace(/[ك]/g, 'ک')
+    .replace(/[ة]/g, 'ه')
+    .replace(/[\u200B-\u200D\uFEFF]/g, ' ') // zero-width spaces
+    .replace(/[^a-z0-9\u0600-\u06FF\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Verifies that a product title is genuinely relevant to the user query,
+ * preventing accidental matching of screen protectors, wrong generations, or irrelevant accessories.
+ */
+export function isRelevantProduct(title: string, query: string): boolean {
+  if (!title || !query) return false;
+
+  const normalizedTitle = normalizeText(title);
+  const normalizedQuery = normalizeText(query);
+
+  const queryTokens = normalizedQuery.split(' ').filter((t) => t.length > 1);
+  if (queryTokens.length === 0) return true;
+
+  // Check if query is looking for an accessory
+  const queryWantsAccessory = ACCESSORY_KEYWORDS.some((kw) =>
+    normalizedQuery.includes(kw.toLowerCase())
+  );
+
+  // If user didn't ask for an accessory, reject titles that start with or are accessory products
+  if (!queryWantsAccessory) {
+    const isAccessory = ACCESSORY_KEYWORDS.some((kw) => {
+      const kwLower = kw.toLowerCase();
+      // Match accessory keyword as full word or at start
+      const regex = new RegExp(`(^|\\s)${kwLower}(\\s|$)`, 'i');
+      return regex.test(normalizedTitle);
+    });
+
+    if (isAccessory) {
+      return false;
+    }
+  }
+
+  // Check chip / generation tags (e.g. m1, m2, m3, m4, m5)
+  const chipPattern = /\b(m[1-9])\b/i;
+  const queryChipMatch = normalizedQuery.match(chipPattern);
+  if (queryChipMatch) {
+    const requestedChip = queryChipMatch[1].toLowerCase();
+    const titleChipMatch = normalizedTitle.match(chipPattern);
+    if (titleChipMatch && titleChipMatch[1].toLowerCase() !== requestedChip) {
+      // Conflicting generation found in title (e.g. requested M4 but title is M3)
+      return false;
+    }
+  }
+
+  // Check model number tags (e.g., iphone 13, 14, 15, 16 / s22, s23, s24)
+  const modelNumPattern = /\b(\d{1,2}|s\d{2})\b/i;
+  const queryModelMatch = normalizedQuery.match(modelNumPattern);
+  if (queryModelMatch) {
+    const requestedModel = queryModelMatch[1].toLowerCase();
+    if (!normalizedTitle.includes(requestedModel)) {
+      return false;
+    }
+  }
+
+  // Title must contain at least one significant query token
+  const matchedTokensCount = queryTokens.filter((token) => normalizedTitle.includes(token)).length;
+  return matchedTokensCount >= Math.min(queryTokens.length, 1);
 }
 
 /**
@@ -146,10 +260,11 @@ const DigikalaResponseSchema = z.object({
 });
 
 export async function fetchDigikalaPrice(query: string): Promise<ProductResult | null> {
-  try {
-    const encodedQuery = encodeURIComponent(query.trim());
-    const apiUrl = `https://api.digikala.com/v1/search/?q=${encodedQuery}&page=1`;
+  const encodedQuery = encodeURIComponent(query.trim());
+  const fallbackUrl = `https://www.digikala.com/search/?q=${encodedQuery}`;
 
+  try {
+    const apiUrl = `https://api.digikala.com/v1/search/?q=${encodedQuery}&page=1`;
     const response = await fetchWithRedirection(apiUrl);
     const parsedData = DigikalaResponseSchema.safeParse(response.data);
 
@@ -157,26 +272,30 @@ export async function fetchDigikalaPrice(query: string): Promise<ProductResult |
       return null;
     }
 
-    // Pick first marketable product or fallback to the first item
     const products = parsedData.data.data.products;
-    const product = products.find((p) => p.status === 'marketable') || products[0];
 
-    if (!product) {
+    // Filter relevant products that match the requested query
+    const relevantProducts = products.filter((p) => {
+      const fullTitle = `${p.title_fa || ''} ${p.title_en || ''}`.trim();
+      return isRelevantProduct(fullTitle, query);
+    });
+
+    if (relevantProducts.length === 0) {
       return null;
     }
 
+    // Pick first marketable matching product
+    const product = relevantProducts.find((p) => p.status === 'marketable') || relevantProducts[0];
     const title = product.title_fa || product.title_en || query;
 
-    // Digikala prices are in Iranian Rials -> convert to Tomans (1 Toman = 10 Rials)
     const rialPrice =
       product.default_variant?.price?.selling_price ||
       product.default_variant?.price?.rrp_price ||
       0;
     const priceInTomans = Math.round(rialPrice / 10);
-
     const isAvailable = product.status === 'marketable' && priceInTomans > 0;
 
-    let productUrl = `https://www.digikala.com/search/?q=${encodedQuery}`;
+    let productUrl = fallbackUrl;
     if (typeof product.url === 'string' && product.url.length > 0) {
       productUrl = product.url.startsWith('http')
         ? product.url
@@ -196,12 +315,15 @@ export async function fetchDigikalaPrice(query: string): Promise<ProductResult |
       source: 'Digikala',
       title,
       price: priceInTomans,
-      formattedPrice: formatTomanPrice(priceInTomans),
+      formattedPrice: isAvailable ? formatTomanPrice(priceInTomans) : '❌ ناموجود / یافت نشد',
       url: productUrl,
       isAvailable,
       imageUrl,
     };
-  } catch (error) {
+  } catch (error: any) {
+    process.stderr.write(
+      `[priceService] [Digikala] Error fetching "${query}": ${error?.message || error} (status: ${error?.response?.status})\n`
+    );
     return null;
   }
 }
@@ -234,9 +356,12 @@ const TorobResponseSchema = z.object({
 });
 
 export async function fetchTorobPrice(query: string): Promise<ProductResult | null> {
+  const encodedQuery = encodeURIComponent(query.trim());
+  const fallbackUrl = `https://torob.com/search/?query=${encodedQuery}`;
+
   try {
-    const encodedQuery = encodeURIComponent(query.trim());
-    const apiUrl = `https://api.torob.com/v4/base-product/search/?sort=price&query=${encodedQuery}&page=0&size=1`;
+    // Note: Do NOT use sort=price to avoid matching cheap accessories instead of main devices
+    const apiUrl = `https://api.torob.com/v4/base-product/search/?query=${encodedQuery}&page=0&size=10`;
 
     const response = await axios.get(apiUrl, {
       headers: baseHeaders,
@@ -248,14 +373,25 @@ export async function fetchTorobPrice(query: string): Promise<ProductResult | nu
       return null;
     }
 
-    const item = parsedData.data.results[0];
-    const title = item.name1 || item.name2 || query;
+    const items = parsedData.data.results;
 
-    // Torob prices are already in Tomans
+    // Filter relevant products
+    const relevantItems = items.filter((item) => {
+      const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim();
+      return isRelevantProduct(fullTitle, query);
+    });
+
+    if (relevantItems.length === 0) {
+      return null;
+    }
+
+    // Pick top relevant item with price
+    const item = relevantItems.find((i) => (i.price || 0) > 0) || relevantItems[0];
+    const title = item.name1 || item.name2 || query;
     const priceInTomans = item.price || 0;
     const isAvailable = priceInTomans > 0 && item.stock_status !== 'unavailable';
 
-    let productUrl = `https://torob.com/search/?query=${encodedQuery}`;
+    let productUrl = fallbackUrl;
     if (item.web_client_absolute_url) {
       productUrl = item.web_client_absolute_url.startsWith('http')
         ? item.web_client_absolute_url
@@ -270,12 +406,15 @@ export async function fetchTorobPrice(query: string): Promise<ProductResult | nu
       source: 'Torob',
       title,
       price: priceInTomans,
-      formattedPrice: formatTomanPrice(priceInTomans),
+      formattedPrice: isAvailable ? formatTomanPrice(priceInTomans) : '❌ ناموجود / یافت نشد',
       url: productUrl,
       isAvailable,
       imageUrl,
     };
-  } catch (error) {
+  } catch (error: any) {
+    process.stderr.write(
+      `[priceService] [Torob] Error fetching "${query}": ${error?.message || error} (status: ${error?.response?.status})\n`
+    );
     return null;
   }
 }
@@ -303,13 +442,20 @@ const TechnolifeProductSchema = z.object({
 
 const TechnolifeResponseSchema = z.object({
   results: z.array(TechnolifeProductSchema).optional(),
-  data: z.union([z.array(TechnolifeProductSchema), z.object({ products: z.array(TechnolifeProductSchema).optional() })]).optional(),
+  data: z
+    .union([
+      z.array(TechnolifeProductSchema),
+      z.object({ products: z.array(TechnolifeProductSchema).optional() }),
+    ])
+    .optional(),
   products: z.array(TechnolifeProductSchema).optional(),
 });
 
 export async function fetchTechnolifePrice(query: string): Promise<ProductResult | null> {
+  const encodedQuery = encodeURIComponent(query.trim());
+  const fallbackUrl = `https://www.technolife.ir/product/search?keyword=${encodedQuery}`;
+
   try {
-    const encodedQuery = encodeURIComponent(query.trim());
     const apiUrl = `https://www.technolife.ir/api/v1/product/search?keyword=${encodedQuery}&page=1`;
 
     const response = await axios.get(apiUrl, {
@@ -327,7 +473,11 @@ export async function fetchTechnolifePrice(query: string): Promise<ProductResult
       products = parsedData.data.results;
     } else if (Array.isArray(parsedData.data.data)) {
       products = parsedData.data.data;
-    } else if (parsedData.data.data && typeof parsedData.data.data === 'object' && parsedData.data.data.products) {
+    } else if (
+      parsedData.data.data &&
+      typeof parsedData.data.data === 'object' &&
+      parsedData.data.data.products
+    ) {
       products = parsedData.data.data.products;
     } else if (parsedData.data.products && parsedData.data.products.length > 0) {
       products = parsedData.data.products;
@@ -337,18 +487,27 @@ export async function fetchTechnolifePrice(query: string): Promise<ProductResult
       return null;
     }
 
-    const product = products[0];
+    const relevantProducts = products.filter((p) => {
+      const fullTitle = `${p.title || ''} ${p.name || ''} ${p.product_name || ''}`.trim();
+      return isRelevantProduct(fullTitle, query);
+    });
+
+    if (relevantProducts.length === 0) {
+      return null;
+    }
+
+    const product = relevantProducts[0];
     const title = product.title || product.name || product.product_name || query;
 
     const rawPrice = product.price || product.selling_price || product.discounted_price || 0;
-    const numericPrice = typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0 : rawPrice;
+    const numericPrice =
+      typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0 : rawPrice;
 
-    // Technolife prices are usually in Tomans
     const priceInTomans = Math.round(numericPrice);
     const isAvailable =
       (product.is_available ?? product.available ?? product.in_stock ?? true) && priceInTomans > 0;
 
-    let productUrl = `https://www.technolife.ir/product/search?keyword=${encodedQuery}`;
+    let productUrl = fallbackUrl;
     if (product.url) {
       productUrl = product.url.startsWith('http')
         ? product.url
@@ -363,26 +522,30 @@ export async function fetchTechnolifePrice(query: string): Promise<ProductResult
       source: 'Technolife',
       title,
       price: priceInTomans,
-      formattedPrice: formatTomanPrice(priceInTomans),
+      formattedPrice: isAvailable ? formatTomanPrice(priceInTomans) : '❌ ناموجود / یافت نشد',
       url: productUrl,
       isAvailable,
       imageUrl,
     };
-  } catch (error) {
+  } catch (error: any) {
+    process.stderr.write(
+      `[priceService] [Technolife] Error fetching "${query}": ${error?.message || error} (status: ${error?.response?.status})\n`
+    );
     return null;
   }
 }
 
 /* ==========================================================================
-   4. Price Aggregator
+   4. Price Aggregator (Returns Full 3-Store Matrix)
    ========================================================================== */
 
 /**
- * Scrapes all supported Iranian e-commerce platforms concurrently using Promise.allSettled,
- * filters unavailable/null items, and returns available products sorted ascending by price.
+ * Scrapes all supported Iranian e-commerce platforms concurrently.
+ * Returns the FULL status matrix for all 3 stores (Digikala, Torob, Technolife),
+ * with available items sorted ascending by price at the top, followed by unavailable stores.
  *
- * @param query Search keyword (e.g. "AirPods Pro 2")
- * @returns Array of sorted ProductResult items
+ * @param query Search keyword (e.g. "MacBook Air M4", "iPhone 15")
+ * @returns Array containing entries for all 3 stores
  */
 export async function compareAllPrices(query: string): Promise<ProductResult[]> {
   const normalizedQuery = query.trim();
@@ -392,7 +555,7 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
 
   // Check cache first for instant sub-second response
   const cached = priceCache.get(normalizedQuery);
-  if (cached && Array.isArray(cached)) {
+  if (cached && Array.isArray(cached) && cached.length === 3) {
     return cached;
   }
 
@@ -402,23 +565,54 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
     fetchTechnolifePrice(normalizedQuery),
   ]);
 
-  const validProducts: ProductResult[] = [];
+  const digikalaRes = settledResults[0].status === 'fulfilled' ? settledResults[0].value : null;
+  const torobRes = settledResults[1].status === 'fulfilled' ? settledResults[1].value : null;
+  const technolifeRes = settledResults[2].status === 'fulfilled' ? settledResults[2].value : null;
 
-  for (const item of settledResults) {
-    if (item.status === 'fulfilled' && item.value !== null && item.value.isAvailable && item.value.price > 0) {
-      validProducts.push(item.value);
-    }
-  }
+  const encodedQuery = encodeURIComponent(normalizedQuery);
 
-  // Sort ascending by price (lowest to highest)
-  const sortedResults = validProducts.sort((a, b) => a.price - b.price);
+  // Guarantee all 3 stores are populated in the matrix
+  const fullMatrix: ProductResult[] = [
+    digikalaRes || {
+      source: 'Digikala',
+      title: 'ناموجود / یافت نشد',
+      price: 0,
+      formattedPrice: '❌ ناموجود / یافت نشد',
+      url: `https://www.digikala.com/search/?q=${encodedQuery}`,
+      isAvailable: false,
+    },
+    torobRes || {
+      source: 'Torob',
+      title: 'ناموجود / یافت نشد',
+      price: 0,
+      formattedPrice: '❌ ناموجود / یافت نشد',
+      url: `https://torob.com/search/?query=${encodedQuery}`,
+      isAvailable: false,
+    },
+    technolifeRes || {
+      source: 'Technolife',
+      title: 'ناموجود / یافت نشد',
+      price: 0,
+      formattedPrice: '❌ ناموجود / یافت نشد',
+      url: `https://www.technolife.ir/product/search?keyword=${encodedQuery}`,
+      isAvailable: false,
+    },
+  ];
 
-  // Store in cache for 15 minutes if products were found
-  if (sortedResults.length > 0) {
-    priceCache.set(normalizedQuery, sortedResults);
-  }
+  // Separate available and unavailable stores
+  const availableStores = fullMatrix
+    .filter((s) => s.isAvailable && s.price > 0)
+    .sort((a, b) => a.price - b.price);
 
-  return sortedResults;
+  const unavailableStores = fullMatrix.filter((s) => !s.isAvailable || s.price <= 0);
+
+  // Combine: Available lowest-price first, followed by out-of-stock stores
+  const finalResults = [...availableStores, ...unavailableStores];
+
+  // Cache results for 15 minutes
+  priceCache.set(normalizedQuery, finalResults);
+
+  return finalResults;
 }
 
 /* ==========================================================================
@@ -437,17 +631,13 @@ if (isMainModule) {
 
   compareAllPrices(searchTarget)
     .then((results) => {
-      if (results.length === 0) {
-        console.log('❌ No available products found for the given query.');
-        return;
-      }
+      console.log(`📦 Status Matrix for all 3 Stores:\n`);
 
-      console.log(`✅ Found ${results.length} available offer(s), sorted by lowest price:\n`);
-      
       console.table(
         results.map((r, idx) => ({
           '#': idx + 1,
           Store: r.source,
+          Status: r.isAvailable ? '✅ In Stock' : '❌ Out of Stock',
           'Price (Toman)': r.formattedPrice,
           Title: r.title.length > 50 ? `${r.title.slice(0, 47)}...` : r.title,
           URL: r.url,

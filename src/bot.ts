@@ -68,21 +68,22 @@ Your primary objective is to find the absolute CHEAPEST deal among Digikala, Tor
 
 Rules:
 1. Always call \`compare_prices\` for product queries.
-2. When tool results return:
-   - The items are already sorted ascending by price (Index 0 is the CHEAPEST).
-   - Clearly announce the winner / best deal at the very top:
-     🏆 <b>بهترین و ارزانترین قیمت:</b> [نام فروشگاه] - [قیمت به تومان]
-   - Then provide a clean comparison list of all available stores with their prices:
-     📊 <b>مقایسه قیمتها:</b>
-     🥇 <b>[فروشگاه ۱]</b>: [قیمت]
-     🥈 <b>[فروشگاه ۲]</b>: [قیمت]
-     🥉 <b>[فروشگاه ۳]</b>: [قیمت]
-   - Mention the price difference / savings if applicable.
+2. When tool results return, present the COMPLETE 3-STORE STATUS MATRIX:
+   - If available products exist (at least one store has isAvailable: true):
+     🏆 <b>ارزان‌ترین پیشنهاد:</b> [فروشگاه برنده] - [قیمت به تومان]
+     
+     📊 <b>وضعیت کامل فروشگاه‌ها:</b>
+     • <b>دیجی‌کالا (Digikala):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+     • <b>ترب (Torob):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+     • <b>تکنولایف (Technolife):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+     
+     (If multiple stores are available, mention the price difference / savings between the cheapest and the others).
+   - If ALL stores are unavailable (isAvailable: false):
+     Clearly state that the requested model is currently NOT available in any of the 3 stores. NEVER hallucinate or present different chipsets/models/accessories as the requested item.
 3. Format:
    - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
    - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
    - Keep the tone fast, practical, and helpful.
-4. If no products are found in the tool output, politely explain that the product was not found or is currently out of stock, and suggest a refined search query.
 `.trim();
 
 /**
@@ -322,36 +323,37 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Generates structured Persian HTML comparison summary with strict lowest price highlight.
+ * Generates structured Persian HTML comparison summary with strict lowest price highlight and full 3-store status matrix.
  */
 export function formatComparisonFallback(query: string, results: ProductResult[]): string {
-  if (!results || results.length === 0) {
+  const availableItems = results.filter((r) => r.isAvailable && r.price > 0);
+  const digikalaItem = results.find((r) => r.source === 'Digikala');
+  const torobItem = results.find((r) => r.source === 'Torob');
+  const technolifeItem = results.find((r) => r.source === 'Technolife');
+
+  if (availableItems.length === 0) {
     return (
-      `🔍 <b>نتایج استعلام قیمت برای:</b> <code>${escapeHtml(query)}</code>\n\n` +
-      `❌ متأسفانه این کالا در حال حاضر در دیجی‌کالا، ترب و تکنولایف ناموجود است یا یافت نشد.\n` +
-      `💡 <i>پیشنهاد: نام لاتین کالا یا مدل دقیق‌تری را وارد کنید.</i>`
+      `🔍 <b>استعلام قیمت برای:</b> <code>${escapeHtml(query)}</code>\n\n` +
+      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در هیچ‌یک از ۳ فروشگاه معتبر (دیجی‌کالا، ترب، تکنولایف) موجود نیست یا یافت نشد.\n\n` +
+      `💡 <i>پیشنهاد: مدل مشخص‌تر یا نام لاتین دقیق کالا را ارسال کنید.</i>`
     );
   }
 
-  const cheapest = results[0];
-  const medals = ['🥇', '🥈', '🥉'];
+  const cheapest = availableItems[0];
 
   let html = `🛍️ <b>استعلام و مقایسه قیمت: ${escapeHtml(query)}</b>\n\n`;
-  html += `🏆 <b>بهترین و ارزانترین قیمت:</b> <b>${cheapest.source}</b> با قیمت <b>${cheapest.formattedPrice}</b>\n\n`;
+  html += `🏆 <b>ارزان‌ترین پیشنهاد:</b> <b>${cheapest.source}</b> با قیمت <b>${cheapest.formattedPrice}</b>\n\n`;
 
-  html += `📊 <b>مقایسه قیمتها:</b>\n`;
-  results.forEach((item, index) => {
-    const medal = medals[index] || `• [${index + 1}]`;
-    html += `${medal} <b>${item.source}</b>: ${item.formattedPrice}\n`;
-  });
+  html += `📊 <b>وضعیت کامل فروشگاه‌ها:</b>\n`;
+  html += `• <b>دیجی‌کالا (Digikala):</b> ${digikalaItem?.isAvailable ? `<b>${digikalaItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
+  html += `• <b>ترب (Torob):</b> ${torobItem?.isAvailable ? `<b>${torobItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
+  html += `• <b>تکنولایف (Technolife):</b> ${technolifeItem?.isAvailable ? `<b>${technolifeItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
 
-  // Calculate savings if multiple stores available
-  if (results.length > 1) {
-    const highest = results[results.length - 1];
+  if (availableItems.length > 1) {
+    const highest = availableItems[availableItems.length - 1];
     const diff = highest.price - cheapest.price;
     if (diff > 0) {
-      const diffFormatted = `${diff.toLocaleString('fa-IR')} تومان`;
-      html += `\n💰 <b>اختلاف قیمت بازار (میزان سود خرید از ارزانترین):</b> ${diffFormatted}\n`;
+      html += `\n💰 <b>میزان سود خرید از ارزان‌ترین:</b> ${diff.toLocaleString('fa-IR')} تومان ارزان‌تر از ${highest.source}\n`;
     }
   }
 
@@ -401,77 +403,62 @@ function buildProductInlineKeyboard(
   searchQuery: string
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
+  const encoded = encodeURIComponent(searchQuery);
 
-  if (products.length === 0) {
-    // Fallback search buttons if no products directly scraped
-    const encoded = encodeURIComponent(searchQuery);
-    const torobSearchUrl = toAffiliateUrl(`https://torob.com/search/?query=${encoded}`, 'Torob');
-    const digikalaSearchUrl = toAffiliateUrl(
-      `https://www.digikala.com/search/?q=${encoded}`,
-      'Digikala'
-    );
+  const availableItems = products.filter((p) => p.isAvailable && p.price > 0);
+  const digikalaItem = products.find((p) => p.source === 'Digikala');
+  const torobItem = products.find((p) => p.source === 'Torob');
+  const technolifeItem = products.find((p) => p.source === 'Technolife');
 
+  if (availableItems.length === 0) {
+    // Fallback search buttons if no products available
     keyboard
-      .url('🔍 جستجو در ترب', torobSearchUrl)
+      .url('🔍 جستجو در ترب', toAffiliateUrl(`https://torob.com/search/?query=${encoded}`, 'Torob'))
       .row()
-      .url('📦 جستجو در دیجی‌کالا', digikalaSearchUrl);
+      .url(
+        '📦 جستجو در دیجی‌کالا',
+        toAffiliateUrl(`https://www.digikala.com/search/?q=${encoded}`, 'Digikala')
+      )
+      .row()
+      .url(
+        '⚡ جستجو در تکنولایف',
+        toAffiliateUrl(`https://www.technolife.ir/product/search?keyword=${encoded}`, 'Technolife')
+      );
     return keyboard;
   }
 
-  const cheapest = products[0];
+  const cheapest = availableItems[0];
   const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
   // 1. Cheapest Store primary action button
   keyboard.url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl).row();
 
-  // 2. Additional store links
-  const torobItem = products.find((p) => p.source === 'Torob');
-  const digikalaItem = products.find((p) => p.source === 'Digikala');
-  const technolifeItem = products.find((p) => p.source === 'Technolife');
-
+  // 2. Individual store links
   const secondRowButtons: { text: string; url: string }[] = [];
 
-  if (torobItem && torobItem.url !== cheapest.url) {
-    secondRowButtons.push({
-      text: '🔍 مشاهده در ترب',
-      url: toAffiliateUrl(torobItem.url, 'Torob'),
-    });
-  } else if (!torobItem) {
-    secondRowButtons.push({
-      text: '🔍 جستجو در ترب',
-      url: toAffiliateUrl(
-        `https://torob.com/search/?query=${encodeURIComponent(searchQuery)}`,
-        'Torob'
-      ),
-    });
-  }
+  const digikalaUrl = digikalaItem?.url || `https://www.digikala.com/search/?q=${encoded}`;
+  secondRowButtons.push({
+    text: digikalaItem?.isAvailable ? '📦 دیجی‌کالا' : '📦 جستجو در دیجی‌کالا',
+    url: toAffiliateUrl(digikalaUrl, 'Digikala'),
+  });
 
-  if (digikalaItem && digikalaItem.url !== cheapest.url) {
-    secondRowButtons.push({
-      text: '📦 مشاهده در دیجی‌کالا',
-      url: toAffiliateUrl(digikalaItem.url, 'Digikala'),
-    });
-  } else if (!digikalaItem) {
-    secondRowButtons.push({
-      text: '📦 جستجو در دیجی‌کالا',
-      url: toAffiliateUrl(
-        `https://www.digikala.com/search/?q=${encodeURIComponent(searchQuery)}`,
-        'Digikala'
-      ),
-    });
-  }
+  const torobUrl = torobItem?.url || `https://torob.com/search/?query=${encoded}`;
+  secondRowButtons.push({
+    text: torobItem?.isAvailable ? '🔍 ترب' : '🔍 جستجو در ترب',
+    url: toAffiliateUrl(torobUrl, 'Torob'),
+  });
 
-  if (technolifeItem && technolifeItem.url !== cheapest.url) {
-    secondRowButtons.push({
-      text: '⚡ مشاهده در تکنولایف',
-      url: toAffiliateUrl(technolifeItem.url, 'Technolife'),
-    });
-  }
+  const technolifeUrl =
+    technolifeItem?.url || `https://www.technolife.ir/product/search?keyword=${encoded}`;
+  secondRowButtons.push({
+    text: technolifeItem?.isAvailable ? '⚡ تکنولایف' : '⚡ جستجو در تکنولایف',
+    url: toAffiliateUrl(technolifeUrl, 'Technolife'),
+  });
 
   // Layout buttons cleanly
   secondRowButtons.forEach((btn, idx) => {
     keyboard.url(btn.text, btn.url);
-    if (idx % 2 === 1 && idx < secondRowButtons.length - 1) {
+    if (idx === 1) {
       keyboard.row();
     }
   });
@@ -672,53 +659,33 @@ bot.on('inline_query', async (ctx: Context) => {
 
   try {
     const products = await compareAllPrices(query);
+    const availableItems = products.filter((p) => p.isAvailable && p.price > 0);
 
-    if (!products || products.length === 0) {
+    if (availableItems.length === 0) {
       const notFoundArticle = InlineQueryResultBuilder.article(
         'not_found',
         `❌ محصول "${query}" یافت نشد`,
         {
           description: 'هیچ کالای فعالی در دیجی‌کالا، ترب و تکنولایف پیدا نشد.',
-          reply_markup: new InlineKeyboard()
-            .url(
-              '🔍 جستجو در ترب',
-              toAffiliateUrl(
-                `https://torob.com/search/?query=${encodeURIComponent(query)}`,
-                'Torob'
-              )
-            )
-            .url(
-              '📦 جستجو در دیجی‌کالا',
-              toAffiliateUrl(
-                `https://www.digikala.com/search/?q=${encodeURIComponent(query)}`,
-                'Digikala'
-              )
-            ),
+          reply_markup: buildProductInlineKeyboard(products, query),
         }
       ).text(
-        `❌ متأسفانه کالای فعالی برای عبارت <b>${escapeHtml(query)}</b> در فروشگاه‌های ایران یافت نشد.`,
+        `❌ متأسفانه محصول <b>${escapeHtml(query)}</b> در حال حاضر در هیچ‌یک از ۳ فروشگاه معتبر (دیجی‌کالا، ترب، تکنولایف) موجود نیست یا یافت نشد.`,
         { parse_mode: 'HTML' }
       );
 
       return await ctx.answerInlineQuery([notFoundArticle], { cache_time: 60 });
     }
 
-    const cheapest = products[0];
+    const cheapest = availableItems[0];
     const inlineResults = [];
 
     // 1. Comparison Summary Article
-    let summaryHtml = `🛍️ <b>مقایسه قیمت: ${escapeHtml(query)}</b>\n\n`;
-    summaryHtml += `🏆 <b>بهترین قیمت:</b> ${cheapest.formattedPrice} (از <b>${cheapest.source}</b>)\n\n`;
-    summaryHtml += `📊 <b>فروشگاه‌های تحت پوشش:</b>\n`;
-
-    products.forEach((p, idx) => {
-      const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉';
-      summaryHtml += `${medal} <b>${p.source}:</b> ${p.formattedPrice}\n`;
-    });
+    const summaryHtml = formatComparisonFallback(query, products);
 
     const summaryArticle = InlineQueryResultBuilder.article(
       `summary_${query}`,
-      `🏆 بهترین قیمت: ${cheapest.formattedPrice} (${cheapest.source})`,
+      `🏆 ارزان‌ترین: ${cheapest.formattedPrice} (${cheapest.source})`,
       {
         description: cheapest.title,
         thumbnail_url: cheapest.imageUrl,
@@ -731,18 +698,25 @@ bot.on('inline_query', async (ctx: Context) => {
     // 2. Individual Store Offers
     products.forEach((product, idx) => {
       const affiliateUrl = toAffiliateUrl(product.url, product.source);
+      const isAvail = product.isAvailable && product.price > 0;
+      const titlePrefix = isAvail ? product.source : `${product.source} (ناموجود)`;
+      const priceText = isAvail ? product.formattedPrice : '❌ ناموجود / یافت نشد';
+
       const storeArticle = InlineQueryResultBuilder.article(
         `store_${product.source}_${idx}`,
-        `${product.source}: ${product.formattedPrice}`,
+        `${titlePrefix}: ${priceText}`,
         {
           description: product.title,
           thumbnail_url: product.imageUrl,
-          reply_markup: new InlineKeyboard().url(`🛒 خرید از ${product.source}`, affiliateUrl),
+          reply_markup: new InlineKeyboard().url(
+            isAvail ? `🛒 خرید از ${product.source}` : `🔍 جستجو در ${product.source}`,
+            affiliateUrl
+          ),
         }
       ).text(
         `🛍️ <b>${escapeHtml(product.title)}</b>\n\n` +
-          `💰 <b>قیمت در ${product.source}:</b> ${product.formattedPrice}\n` +
-          `🔗 <a href="${affiliateUrl}">مشاهده و خرید آنلاین در ${product.source}</a>`,
+          `💰 <b>وضعیت در ${product.source}:</b> ${priceText}\n` +
+          `🔗 <a href="${affiliateUrl}">${isAvail ? 'مشاهده و خرید آنلاین' : 'جستجوی محصول در فروشگاه'}</a>`,
         { parse_mode: 'HTML' }
       );
 
