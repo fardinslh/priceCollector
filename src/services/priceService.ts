@@ -2,6 +2,7 @@ import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { priceCache } from './cacheService.js';
 
 /**
  * Product result structure representing price and availability information across platforms.
@@ -384,10 +385,21 @@ export async function fetchTechnolifePrice(query: string): Promise<ProductResult
  * @returns Array of sorted ProductResult items
  */
 export async function compareAllPrices(query: string): Promise<ProductResult[]> {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  // Check cache first for instant sub-second response
+  const cached = priceCache.get(normalizedQuery);
+  if (cached && Array.isArray(cached)) {
+    return cached;
+  }
+
   const settledResults = await Promise.allSettled([
-    fetchDigikalaPrice(query),
-    fetchTorobPrice(query),
-    fetchTechnolifePrice(query),
+    fetchDigikalaPrice(normalizedQuery),
+    fetchTorobPrice(normalizedQuery),
+    fetchTechnolifePrice(normalizedQuery),
   ]);
 
   const validProducts: ProductResult[] = [];
@@ -399,7 +411,14 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
   }
 
   // Sort ascending by price (lowest to highest)
-  return validProducts.sort((a, b) => a.price - b.price);
+  const sortedResults = validProducts.sort((a, b) => a.price - b.price);
+
+  // Store in cache for 15 minutes if products were found
+  if (sortedResults.length > 0) {
+    priceCache.set(normalizedQuery, sortedResults);
+  }
+
+  return sortedResults;
 }
 
 /* ==========================================================================

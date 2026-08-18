@@ -1,6 +1,15 @@
-import { Bot, InlineKeyboard, Keyboard, GrammyError, HttpError, type Context } from 'grammy';
+import {
+  Bot,
+  InlineKeyboard,
+  Keyboard,
+  InlineQueryResultBuilder,
+  GrammyError,
+  HttpError,
+  type Context,
+} from 'grammy';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+import axios from 'axios';
 import process from 'node:process';
 import { compareAllPrices, type ProductResult } from './services/priceService.js';
 import { toAffiliateUrl } from './utils/affiliate.js';
@@ -44,7 +53,7 @@ const comparePricesTool = {
           query: {
             type: Type.STRING,
             description:
-              'The normalized product search term extracted from user input (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3").',
+              'The normalized product search term extracted from user input or voice note (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3").',
           },
         },
         required: ['query'],
@@ -58,7 +67,7 @@ You are a smart, friendly, and expert Persian shopping assistant (دستیار �
 Your job is to help users find the best deals across Iranian online stores (دیجی‌کالا، ترب، تکنولایف).
 
 Instructions:
-1. When the user asks about any product, gadget, phone, laptop, or item (even with typos, informal Persian slang, or English names), extract the normalized product query and call the function \`compare_prices\`.
+1. When the user asks about any product, gadget, phone, laptop, or item (via text or voice note, with typos, slang, or English names), extract the normalized product query and call the function \`compare_prices\`.
 2. NEVER hallucinate or invent prices, stores, or availability. Rely ONLY on the results returned by \`compare_prices\`.
 3. Respond in polite, fluent, natural Persian using HTML formatting (<b>bold</b>, <i>italic</i>, <code>code</code>, <s>strike</s>).
 4. Do NOT use Markdown or MarkdownV2 symbols (*, _, \`, #) in your final response—use strict HTML tags ONLY to ensure clean rendering on Telegram.
@@ -72,14 +81,14 @@ Instructions:
 /**
  * Result structure returned by the agent pipeline.
  */
-interface AgentResponse {
+export interface AgentResponse {
   htmlText: string;
   products?: ProductResult[];
   searchQuery?: string;
 }
 
 /**
- * Execute Gemini Agent with Function Calling for a user message.
+ * Execute Gemini Agent with Function Calling for a text message.
  */
 export async function runShoppingAgent(userMessage: string): Promise<AgentResponse> {
   try {
@@ -108,7 +117,7 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
       const args = functionCall.args as { query?: string };
       const extractedQuery = (args?.query || userMessage).trim();
 
-      // Execute local price comparison across Iranian platforms
+      // Execute cached/live price comparison across Iranian platforms
       const priceResults = await compareAllPrices(extractedQuery);
 
       // 2. Feed tool output back to Gemini for final Persian HTML synthesis
@@ -147,7 +156,7 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
 
       const responseText =
         secondResponse.text ||
-        '✅ نتایج استعلام قیمت دریافت شد. دکمه‌های زیر را برای مشاهده و خرید بررسی کنید:';
+        `✅ قیمت‌های استعلام شده برای <b>${escapeHtml(extractedQuery)}</b>:`;
 
       return {
         htmlText: cleanHtmlOutput(responseText),
@@ -193,6 +202,117 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
 }
 
 /**
+ * Execute Gemini Agent with Multimodal Audio (Voice Message) Input.
+ */
+export async function runShoppingAgentWithAudio(
+  base64Audio: string,
+  mimeType: string = 'audio/ogg'
+): Promise<AgentResponse> {
+  try {
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                data: base64Audio,
+                mimeType,
+              },
+            },
+            {
+              text: 'لطفاً به این پیام صوتی گوش بده، اگر کاربر نام محصولی را برای استعلام یا مقایسه قیمت اعلام کرده است، نام دقیق آن را استخراج کن و تابع compare_prices را فراخوانی کن.',
+            },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION,
+        tools: [comparePricesTool],
+        temperature: 0.2,
+      },
+    });
+
+    const candidates = response.candidates;
+    const firstPart = candidates?.[0]?.content?.parts?.[0];
+    const functionCall = firstPart?.functionCall;
+
+    if (functionCall && functionCall.name === 'compare_prices') {
+      const args = functionCall.args as { query?: string };
+      const extractedQuery = (args?.query || '').trim();
+
+      if (extractedQuery) {
+        const priceResults = await compareAllPrices(extractedQuery);
+
+        const secondResponse = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    data: base64Audio,
+                    mimeType,
+                  },
+                },
+              ],
+            },
+            {
+              role: 'model',
+              parts: [{ functionCall }],
+            },
+            {
+              role: 'user',
+              parts: [
+                {
+                  functionResponse: {
+                    name: 'compare_prices',
+                    response: {
+                      query: extractedQuery,
+                      foundCount: priceResults.length,
+                      results: priceResults,
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+            temperature: 0.3,
+          },
+        });
+
+        const responseText =
+          secondResponse.text ||
+          `🎙️ <b>محصول شناسایی شده از صدای شما:</b> ${escapeHtml(extractedQuery)}\n\n` +
+          `✅ نتایج مقایسه قیمت دریافت شد.`;
+
+        return {
+          htmlText: cleanHtmlOutput(responseText),
+          products: priceResults,
+          searchQuery: extractedQuery,
+        };
+      }
+    }
+
+    const directText =
+      response.text ||
+      '🎙️ پیام صوتی شما دریافت شد اما نام محصول مشخصی در آن تشخیص داده نشد. لطفاً نام کالا را به صورت متنی یا واضح‌تر ارسال کنید.';
+    return {
+      htmlText: cleanHtmlOutput(directText),
+    };
+  } catch (error: any) {
+    console.error('Audio agent execution error:', error?.message || error);
+    return {
+      htmlText: '⚠️ متأسفانه در پردازش پیام صوتی شما خطایی رخ داد. لطفاً نام محصول را به صورت متنی ارسال کنید.',
+    };
+  }
+}
+
+/**
  * Escapes unsafe HTML characters for Telegram HTML parse mode.
  */
 function escapeHtml(text: string): string {
@@ -229,7 +349,10 @@ function buildProductInlineKeyboard(
     // Fallback search buttons if no products directly scraped
     const encoded = encodeURIComponent(searchQuery);
     const torobSearchUrl = toAffiliateUrl(`https://torob.com/search/?query=${encoded}`, 'Torob');
-    const digikalaSearchUrl = toAffiliateUrl(`https://www.digikala.com/search/?q=${encoded}`, 'Digikala');
+    const digikalaSearchUrl = toAffiliateUrl(
+      `https://www.digikala.com/search/?q=${encoded}`,
+      'Digikala'
+    );
 
     keyboard
       .url('🔍 جستجو در ترب', torobSearchUrl)
@@ -242,9 +365,7 @@ function buildProductInlineKeyboard(
   const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
   // 1. Cheapest Store primary action button
-  keyboard
-    .url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl)
-    .row();
+  keyboard.url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl).row();
 
   // 2. Additional store links
   const torobItem = products.find((p) => p.source === 'Torob');
@@ -302,6 +423,38 @@ function buildProductInlineKeyboard(
 }
 
 /**
+ * Sends response to user as photo message if product image is available,
+ * or gracefully falls back to standard text message.
+ */
+async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promise<void> {
+  const replyMarkup =
+    result.products && result.products.length > 0 && result.searchQuery
+      ? buildProductInlineKeyboard(result.products, result.searchQuery)
+      : undefined;
+
+  const cheapest = result.products && result.products.length > 0 ? result.products[0] : null;
+
+  if (cheapest && cheapest.imageUrl && cheapest.imageUrl.startsWith('http')) {
+    try {
+      await ctx.replyWithPhoto(cheapest.imageUrl, {
+        caption: result.htmlText,
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+      });
+      return;
+    } catch (photoError) {
+      console.warn('Could not send as photo, falling back to text reply:', photoError);
+    }
+  }
+
+  // Standard text message
+  await ctx.reply(result.htmlText, {
+    parse_mode: 'HTML',
+    reply_markup: replyMarkup,
+  });
+}
+
+/**
  * Suggestion Keyboard for quick onboarding searches.
  */
 const suggestionKeyboard = new Keyboard()
@@ -321,12 +474,14 @@ const suggestionKeyboard = new Keyboard()
 // /start Command Handler
 bot.command('start', async (ctx: Context) => {
   const welcomeMessage = `
-👋 <b>سلام! به ربات هوشمند مقایسه قیمت خوش آمدید.</b>
+👋 <b>سلام! به ربات هوشمند مقایسه قیمت (مفت‌بر) خوش آمدید.</b>
 
 من دستیار هوشمند شما برای پیدا کردن بهترین و ارزان‌ترین قیمت‌ها در فروشگاه‌های معتبر ایران (<b>دیجی‌کالا</b>، <b>ترب</b> و <b>تکنولایف</b>) هستم.
 
-🔍 <b>روش استفاده:</b>
-کافیست نام هر کالا یا مدل مد نظرتان را به فارسی یا انگلیسی برای من ارسال کنید (مثلاً <code>آیفون 13</code> یا <code>AirPods Pro 2</code>). من سریعاً کمترین قیمت بازار را همراه با لینک مستقیم خرید برای شما استخراج می‌کنم.
+🔍 <b>روش‌های استفاده:</b>
+1️⃣ <b>ارسال متن:</b> نام کالا را تایپ کنید (مثلاً: <code>آیفون 13</code> یا <code>AirPods Pro 2</code>).
+2️⃣ <b>ارسال وویس:</b> نام کالا را با ویس بگویید، هوش مصنوعی سریعاً آن را تشخیص داده و قیمت‌ها را استخراج می‌کند.
+3️⃣ <b>حالت اینلاین (Inline):</b> در هر چت یا گروهی کافیست بنویسید <code>@${ctx.me?.username || 'botname'} [نام کالا]</code>.
 
 👇 همچنین می‌توانید از گزینه‌های پیشنهادی زیر استفاده کنید:
 `.trim();
@@ -340,16 +495,17 @@ bot.command('start', async (ctx: Context) => {
 // /help Command Handler
 bot.command('help', async (ctx: Context) => {
   const helpMessage = `
-📖 <b>راهنمای ربات مقایسه قیمت</b>
+📖 <b>راهنمای ربات مقایسه قیمت مفت‌بر</b>
 
-1️⃣ <b>استعلام سریع:</b> نام هر محصول را تایپ و ارسال کنید.
-2️⃣ <b>جستجوی هوشمند:</b> حتی با وجود غلط املایی یا اصطلاحات عامیانه، مدل دقیق استخراج و بررسی می‌شود.
-3️⃣ <b>فروشگاه‌های تحت پوشش:</b>
+1️⃣ <b>استعلام متنی:</b> نام هر محصول را تایپ و ارسال کنید.
+2️⃣ <b>استعلام صوتی (Voice):</b> یک پیام صوتی حاوی نام کالا بفرستید.
+3️⃣ <b>استعلام اینلاین:</b> با تایپ <code>@${ctx.me?.username || 'botname'} [اسم کالا]</code> در هر چتی قیمت‌ها را ببینید.
+4️⃣ <b>فروشگاه‌های تحت پوشش:</b>
    • دیجی‌کالا (Digikala)
    • ترب (Torob)
    • تکنولایف (Technolife)
 
-💡 <i>نکته: قیمت‌ها به تومان محاسبه شده و ارزان‌ترین فروشنده همیشه با رتبه اول به شما پیشنهاد می‌شود.</i>
+💡 <i>نکته: قیمت‌ها در حافظه کش ۱۵ دقیقه‌ای ذخیره می‌شوند تا پاسخ‌ها فوری و زیر ثانیه ارسال شوند.</i>
 `.trim();
 
   await ctx.reply(helpMessage, {
@@ -365,7 +521,7 @@ bot.on('message:text', async (ctx: Context) => {
   // Handle help button from suggestion keyboard
   if (text === 'ℹ️ راهنما') {
     return ctx.reply(
-      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code>).',
+      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا یک وویس بفرستید).',
       { parse_mode: 'HTML' }
     );
   }
@@ -375,28 +531,154 @@ bot.on('message:text', async (ctx: Context) => {
 
   try {
     const result = await runShoppingAgent(text);
-
-    const replyOptions: {
-      parse_mode: 'HTML';
-      reply_markup?: InlineKeyboard;
-    } = {
+    await sendShoppingResponse(ctx, result);
+  } catch (error: any) {
+    console.error('Error handling user text message:', error?.message || error);
+    await ctx.reply('⚠️ مشکلی در پردازش پیام شما به وجود آمد. لطفاً مجدداً امتحان کنید.', {
       parse_mode: 'HTML',
-    };
+    });
+  }
+});
 
-    if (result.products && result.products.length > 0 && result.searchQuery) {
-      replyOptions.reply_markup = buildProductInlineKeyboard(
-        result.products,
-        result.searchQuery
-      );
+// Voice Message Handler (Multimodal Gemini Speech Recognition)
+bot.on('message:voice', async (ctx: Context) => {
+  const voice = ctx.message?.voice;
+  if (!voice) return;
+
+  await ctx.replyWithChatAction('typing');
+
+  try {
+    const file = await ctx.getFile();
+
+    if (!file.file_path) {
+      return ctx.reply('⚠️ دریافت فایل صوتی با مشکل مواجه شد. لطفاً متن محصول را ارسال کنید.', {
+        parse_mode: 'HTML',
+      });
     }
 
-    await ctx.reply(result.htmlText, replyOptions);
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+    const response = await axios.get<ArrayBuffer>(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+    });
+
+    const base64Audio = Buffer.from(response.data).toString('base64');
+    const mimeType = voice.mime_type || 'audio/ogg';
+
+    const result = await runShoppingAgentWithAudio(base64Audio, mimeType);
+    await sendShoppingResponse(ctx, result);
   } catch (error: any) {
-    console.error('Error handling user message:', error?.message || error);
+    console.error('Error handling voice message:', error?.message || error);
     await ctx.reply(
-      '⚠️ مشکلی در پردازش پیام شما به وجود آمد. لطفاً مجدداً امتحان کنید.',
+      '⚠️ در پردازش پیام صوتی شما خطایی رخ داد. لطفاً نام محصول را به صورت متنی ارسال کنید.',
       { parse_mode: 'HTML' }
     );
+  }
+});
+
+// Inline Query Handler (@botname [query])
+bot.on('inline_query', async (ctx: Context) => {
+  const query = ctx.inlineQuery?.query?.trim() || '';
+
+  if (!query) {
+    const helpArticle = InlineQueryResultBuilder.article(
+      'inline_help',
+      '🔍 جستجوی هوشمند قیمت کالا',
+      {
+        description: 'نام محصول را تایپ کنید (مثلاً: iPhone 15 یا ایرپاد پرو)',
+        thumbnail_url: 'https://cdn-icons-png.flaticon.com/512/3144/3144456.png',
+      }
+    ).text(
+      '👋 <b>برای استعلام قیمت در تلگرام:</b>\nنام محصول مورد نظرتان را پس از آیدی ربات بنویسید (مثلاً: <code>@botname MacBook Air M3</code>).',
+      { parse_mode: 'HTML' }
+    );
+
+    return await ctx.answerInlineQuery([helpArticle], { cache_time: 300 });
+  }
+
+  try {
+    const products = await compareAllPrices(query);
+
+    if (!products || products.length === 0) {
+      const notFoundArticle = InlineQueryResultBuilder.article(
+        'not_found',
+        `❌ محصول "${query}" یافت نشد`,
+        {
+          description: 'هیچ کالای فعالی در دیجی‌کالا، ترب و تکنولایف پیدا نشد.',
+          reply_markup: new InlineKeyboard()
+            .url(
+              '🔍 جستجو در ترب',
+              toAffiliateUrl(
+                `https://torob.com/search/?query=${encodeURIComponent(query)}`,
+                'Torob'
+              )
+            )
+            .url(
+              '📦 جستجو در دیجی‌کالا',
+              toAffiliateUrl(
+                `https://www.digikala.com/search/?q=${encodeURIComponent(query)}`,
+                'Digikala'
+              )
+            ),
+        }
+      ).text(
+        `❌ متأسفانه کالای فعالی برای عبارت <b>${escapeHtml(query)}</b> در فروشگاه‌های ایران یافت نشد.`,
+        { parse_mode: 'HTML' }
+      );
+
+      return await ctx.answerInlineQuery([notFoundArticle], { cache_time: 60 });
+    }
+
+    const cheapest = products[0];
+    const inlineResults = [];
+
+    // 1. Comparison Summary Article
+    let summaryHtml = `🛍️ <b>مقایسه قیمت: ${escapeHtml(query)}</b>\n\n`;
+    summaryHtml += `🏆 <b>بهترین قیمت:</b> ${cheapest.formattedPrice} (از <b>${cheapest.source}</b>)\n\n`;
+    summaryHtml += `📊 <b>فروشگاه‌های تحت پوشش:</b>\n`;
+
+    products.forEach((p, idx) => {
+      const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉';
+      summaryHtml += `${medal} <b>${p.source}:</b> ${p.formattedPrice}\n`;
+    });
+
+    const summaryArticle = InlineQueryResultBuilder.article(
+      `summary_${query}`,
+      `🏆 بهترین قیمت: ${cheapest.formattedPrice} (${cheapest.source})`,
+      {
+        description: cheapest.title,
+        thumbnail_url: cheapest.imageUrl,
+        reply_markup: buildProductInlineKeyboard(products, query),
+      }
+    ).text(summaryHtml, { parse_mode: 'HTML' });
+
+    inlineResults.push(summaryArticle);
+
+    // 2. Individual Store Offers
+    products.forEach((product, idx) => {
+      const affiliateUrl = toAffiliateUrl(product.url, product.source);
+      const storeArticle = InlineQueryResultBuilder.article(
+        `store_${product.source}_${idx}`,
+        `${product.source}: ${product.formattedPrice}`,
+        {
+          description: product.title,
+          thumbnail_url: product.imageUrl,
+          reply_markup: new InlineKeyboard().url(`🛒 خرید از ${product.source}`, affiliateUrl),
+        }
+      ).text(
+        `🛍️ <b>${escapeHtml(product.title)}</b>\n\n` +
+          `💰 <b>قیمت در ${product.source}:</b> ${product.formattedPrice}\n` +
+          `🔗 <a href="${affiliateUrl}">مشاهده و خرید آنلاین در ${product.source}</a>`,
+        { parse_mode: 'HTML' }
+      );
+
+      inlineResults.push(storeArticle);
+    });
+
+    await ctx.answerInlineQuery(inlineResults, { cache_time: 300 });
+  } catch (err) {
+    console.error('Error answering inline query:', err);
+    await ctx.answerInlineQuery([], { cache_time: 10 });
   }
 });
 
