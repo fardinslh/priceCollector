@@ -178,6 +178,16 @@ export function getQueryVariations(query: string): string[] {
   return Array.from(variations).filter((q) => q.length > 0);
 }
 
+const BRAND_FAMILY_MAP: Record<string, string[]> = {
+  iphone: ['iphone', 'ایفون', 'آیفون', 'apple', 'اپل'],
+  macbook: ['macbook', 'مکبوک', 'مک بوک', 'apple', 'اپل'],
+  airpods: ['airpods', 'ایرپاد', 'apple', 'اپل'],
+  ipad: ['ipad', 'ایپد', 'آیپد', 'apple', 'اپل'],
+  samsung: ['samsung', 'سامسونگ', 'galaxy', 'گلکسی'],
+  xiaomi: ['xiaomi', 'شیائومی', 'شیاومی', 'redmi', 'ردمی', 'poco', 'پوکو'],
+  playstation: ['playstation', 'پلی استیشن', 'پلی‌استیشن', 'ps4', 'ps5', 'sony', 'سونی'],
+};
+
 /**
  * Verifies that a product title is genuinely relevant to the user query,
  * preventing accidental matching of screen protectors, wrong generations, or irrelevant accessories.
@@ -191,7 +201,7 @@ export function isRelevantProduct(title: string, query: string): boolean {
   const queryTokens = normalizedQuery.split(' ').filter((t) => t.length > 1);
   if (queryTokens.length === 0) return true;
 
-  // Check if query is looking for an accessory
+  // 1. Check if query is looking for an accessory
   const queryWantsAccessory = ACCESSORY_KEYWORDS.some((kw) =>
     normalizedQuery.includes(kw.toLowerCase())
   );
@@ -209,8 +219,27 @@ export function isRelevantProduct(title: string, query: string): boolean {
     }
   }
 
-  // Check chip / generation tags (e.g. m1, m2, m3, m4, m5)
-  const chipPattern = /\b(m[1-9])\b/i;
+  // 2. Brand / Product family validation (e.g. iphone must not match xiaomi t13)
+  for (const [, aliases] of Object.entries(BRAND_FAMILY_MAP)) {
+    const queryHasBrand = aliases.some((alias) => {
+      const regex = new RegExp(`(^|\\s)${alias}(\\s|$)`, 'i');
+      return regex.test(normalizedQuery);
+    });
+
+    if (queryHasBrand) {
+      const titleHasBrand = aliases.some((alias) => {
+        const regex = new RegExp(`(^|\\s)${alias}(\\s|$)`, 'i');
+        return regex.test(normalizedTitle);
+      });
+
+      if (!titleHasBrand) {
+        return false;
+      }
+    }
+  }
+
+  // 3. Check chip / generation tags (e.g. m1, m2, m3, m4, m5)
+  const chipPattern = /(?:^|\s)(m[1-9])(?:\s|$)/i;
   const queryChipMatch = normalizedQuery.match(chipPattern);
   if (queryChipMatch) {
     const requestedChip = queryChipMatch[1].toLowerCase();
@@ -221,18 +250,23 @@ export function isRelevantProduct(title: string, query: string): boolean {
     }
   }
 
-  // Check model number tags (e.g., iphone 13, 14, 15, 16 / s22, s23, s24)
-  const modelNumPattern = /\b(\d{1,2}|s\d{2})\b/i;
+  // 4. Check model number tags (e.g., iphone 13, 14, 15, 16 / s22, s23, s24)
+  const modelNumPattern = /(?:^|\s)(\d{1,2}|s\d{2})(?:\s|$)/i;
   const queryModelMatch = normalizedQuery.match(modelNumPattern);
   if (queryModelMatch) {
     const requestedModel = queryModelMatch[1].toLowerCase();
-    if (!normalizedTitle.includes(requestedModel)) {
+    const modelInTitleRegex = new RegExp(`(^|\\s)${requestedModel}(\\s|$)`, 'i');
+    if (!modelInTitleRegex.test(normalizedTitle)) {
       return false;
     }
   }
 
-  // Title must contain at least one significant query token
-  const matchedTokensCount = queryTokens.filter((token) => normalizedTitle.includes(token)).length;
+  // 5. Title must contain at least one significant query token
+  const matchedTokensCount = queryTokens.filter((token) => {
+    const regex = new RegExp(`(^|\\s)${token}(\\s|$)`, 'i');
+    return regex.test(normalizedTitle) || normalizedTitle.includes(token);
+  }).length;
+
   return matchedTokensCount >= Math.min(queryTokens.length, 1);
 }
 
@@ -464,6 +498,8 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
   }
 
   const items = parsedData.data.results;
+  process.stderr.write(`[Torob] Found ${items.length} items for "${query}"\n`);
+
   const relevantItems = items.filter((item) => {
     const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim();
     return isRelevantProduct(fullTitle, query);
@@ -473,7 +509,7 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
     return null;
   }
 
-  // Find FIRST item that is BOTH relevant and IN STOCK
+  // Find FIRST item that is BOTH relevant and IN STOCK (price > 0 and stock_status !== 'unavailable')
   const inStockItem = relevantItems.find(
     (i) => (i.price || 0) > 0 && i.stock_status !== 'unavailable'
   );
@@ -495,7 +531,7 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
   const imageUrl = selectedItem.image_url || selectedItem.media_urls?.[0]?.url || undefined;
 
   process.stderr.write(
-    `[priceService] [Torob] Found ${items.length} items (${relevantItems.length} relevant), selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
+    `[priceService] [Torob] Selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
   );
 
   return {
@@ -559,14 +595,40 @@ const TechnolifeResponseSchema = z.object({
 async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult | null> {
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://www.technolife.ir/product/search?keyword=${encodedQuery}`;
-  const apiUrl = `https://www.technolife.ir/api/v1/product/search?keyword=${encodedQuery}&page=1`;
 
-  const response = await axios.get(apiUrl, {
-    headers: technolifeHeaders,
-    timeout: DEFAULT_TIMEOUT_MS,
-  });
+  const primaryUrl = `https://api.technolife.ir/api/v1/product/search?keyword=${encodedQuery}&page=1`;
+  const fallbackApiUrl = `https://www.technolife.ir/api/product/search?keyword=${encodedQuery}`;
 
-  const parsedData = TechnolifeResponseSchema.safeParse(response.data);
+  let responseData: any = null;
+
+  // Try primary API endpoint first
+  try {
+    const response = await axios.get(primaryUrl, {
+      headers: technolifeHeaders,
+      timeout: DEFAULT_TIMEOUT_MS,
+    });
+    responseData = response.data;
+  } catch (primaryErr: any) {
+    // If primary returns error, try fallback endpoint
+    try {
+      const response = await axios.get(fallbackApiUrl, {
+        headers: technolifeHeaders,
+        timeout: DEFAULT_TIMEOUT_MS,
+      });
+      responseData = response.data;
+    } catch (fallbackErr: any) {
+      process.stderr.write(
+        `[Technolife] Search endpoint unavailable or returned 404 (status: ${primaryErr?.response?.status || fallbackErr?.response?.status || 'network error'})\n`
+      );
+      return null;
+    }
+  }
+
+  if (!responseData) {
+    return null;
+  }
+
+  const parsedData = TechnolifeResponseSchema.safeParse(responseData);
   if (!parsedData.success) {
     return null;
   }
@@ -589,6 +651,8 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
   if (!products.length) {
     return null;
   }
+
+  process.stderr.write(`[Technolife] Found ${products.length} items for "${query}"\n`);
 
   const relevantProducts = products.filter((p) => {
     const fullTitle = `${p.title || ''} ${p.name || ''} ${p.product_name || ''}`.trim();
@@ -636,7 +700,7 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
   const imageUrl = selectedProduct.image_url || selectedProduct.image || undefined;
 
   process.stderr.write(
-    `[priceService] [Technolife] Found ${products.length} items (${relevantProducts.length} relevant), selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
+    `[priceService] [Technolife] Selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
   );
 
   return {
@@ -658,7 +722,7 @@ export async function fetchTechnolifePrice(query: string): Promise<ProductResult
       if (result) return result;
     } catch (error: any) {
       process.stderr.write(
-        `[priceService] [Technolife] Error fetching "${q}": ${error?.message || error} (status: ${error?.response?.status})\n`
+        `[Technolife] Search endpoint unavailable or returned 404 (status: ${error?.response?.status || error?.message})\n`
       );
     }
   }
@@ -689,6 +753,10 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
     return cached;
   }
 
+  process.stderr.write(
+    `[priceService] Starting parallel price search for "${normalizedQuery}" across Digikala, Torob, and Technolife...\n`
+  );
+
   const settledResults = await Promise.allSettled([
     fetchDigikalaPrice(normalizedQuery),
     fetchTorobPrice(normalizedQuery),
@@ -698,6 +766,10 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
   const digikalaRes = settledResults[0].status === 'fulfilled' ? settledResults[0].value : null;
   const torobRes = settledResults[1].status === 'fulfilled' ? settledResults[1].value : null;
   const technolifeRes = settledResults[2].status === 'fulfilled' ? settledResults[2].value : null;
+
+  process.stderr.write(
+    `[priceService] Parallel search finished for "${normalizedQuery}": Digikala=${digikalaRes?.isAvailable ? digikalaRes.formattedPrice : 'Out of Stock'}, Torob=${torobRes?.isAvailable ? torobRes.formattedPrice : 'Out of Stock'}, Technolife=${technolifeRes?.isAvailable ? technolifeRes.formattedPrice : 'Out of Stock'}\n`
+  );
 
   const encodedQuery = encodeURIComponent(normalizedQuery);
 
