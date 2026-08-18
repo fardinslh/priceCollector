@@ -63,19 +63,26 @@ const comparePricesTool = {
 };
 
 const SYSTEM_INSTRUCTION = `
-You are a smart, friendly, and expert Persian shopping assistant (دستیار هوشمند مقایسه قیمت).
-Your job is to help users find the best deals across Iranian online stores (دیجی‌کالا، ترب، تکنولایف).
+You are an expert Persian Price Comparison Assistant (موتور مقایسه و شکار کمترین قیمت).
+Your primary objective is to find the absolute CHEAPEST deal among Digikala, Torob, and Technolife.
 
-Instructions:
-1. When the user asks about any product, gadget, phone, laptop, or item (via text or voice note, with typos, slang, or English names), extract the normalized product query and call the function \`compare_prices\`.
-2. NEVER hallucinate or invent prices, stores, or availability. Rely ONLY on the results returned by \`compare_prices\`.
-3. Respond in polite, fluent, natural Persian using ONLY supported Telegram HTML tags: <b>bold</b>, <i>italic</i>, <code>code</code>, <s>strike</s>, and <a href="...">link</a>.
-4. CRITICAL HTML FORMATTING RULE: ONLY use <b>, <i>, <code>, and <a> tags. NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists and structure.
-5. In your response:
-   - Highlight the cheapest store and best price clearly.
-   - List other store prices for quick comparison.
-   - Keep the summary clear, helpful, and concise.
-6. If no products are found in the tool output, politely explain that the product was not found or is currently out of stock in the checked stores, and suggest a refined search query.
+Rules:
+1. Always call \`compare_prices\` for product queries.
+2. When tool results return:
+   - The items are already sorted ascending by price (Index 0 is the CHEAPEST).
+   - Clearly announce the winner / best deal at the very top:
+     🏆 <b>بهترین و ارزانترین قیمت:</b> [نام فروشگاه] - [قیمت به تومان]
+   - Then provide a clean comparison list of all available stores with their prices:
+     📊 <b>مقایسه قیمتها:</b>
+     🥇 <b>[فروشگاه ۱]</b>: [قیمت]
+     🥈 <b>[فروشگاه ۲]</b>: [قیمت]
+     🥉 <b>[فروشگاه ۳]</b>: [قیمت]
+   - Mention the price difference / savings if applicable.
+3. Format:
+   - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
+   - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
+   - Keep the tone fast, practical, and helpful.
+4. If no products are found in the tool output, politely explain that the product was not found or is currently out of stock, and suggest a refined search query.
 `.trim();
 
 /**
@@ -156,7 +163,7 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
 
       const responseText =
         secondResponse.text ||
-        `✅ قیمت‌های استعلام شده برای <b>${escapeHtml(extractedQuery)}</b>:`;
+        formatComparisonFallback(extractedQuery, priceResults);
 
       return {
         htmlText: cleanHtmlOutput(responseText),
@@ -177,16 +184,8 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
     try {
       const directResults = await compareAllPrices(userMessage);
       if (directResults.length > 0) {
-        const cheapest = directResults[0];
-        let fallbackHtml = `🛍️ <b>نتایج مقایسه قیمت برای "${escapeHtml(userMessage)}"</b>\n\n`;
-        fallbackHtml += `🏆 <b>ارزان‌ترین فروشنده:</b> ${cheapest.source} با قیمت <b>${cheapest.formattedPrice}</b>\n\n`;
-        fallbackHtml += `📊 <b>سایر فروشگاه‌ها:</b>\n`;
-        directResults.forEach((item, index) => {
-          fallbackHtml += `${index + 1}. <b>${item.source}:</b> ${item.formattedPrice}\n`;
-        });
-
         return {
-          htmlText: fallbackHtml,
+          htmlText: formatComparisonFallback(userMessage, directResults),
           products: directResults,
           searchQuery: userMessage,
         };
@@ -287,8 +286,7 @@ export async function runShoppingAgentWithAudio(
 
         const responseText =
           secondResponse.text ||
-          `🎙️ <b>محصول شناسایی شده از صدای شما:</b> ${escapeHtml(extractedQuery)}\n\n` +
-          `✅ نتایج مقایسه قیمت دریافت شد.`;
+          formatComparisonFallback(extractedQuery, priceResults);
 
         return {
           htmlText: cleanHtmlOutput(responseText),
@@ -321,6 +319,43 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Generates structured Persian HTML comparison summary with strict lowest price highlight.
+ */
+export function formatComparisonFallback(query: string, results: ProductResult[]): string {
+  if (!results || results.length === 0) {
+    return (
+      `🔍 <b>نتایج استعلام قیمت برای:</b> <code>${escapeHtml(query)}</code>\n\n` +
+      `❌ متأسفانه این کالا در حال حاضر در دیجی‌کالا، ترب و تکنولایف ناموجود است یا یافت نشد.\n` +
+      `💡 <i>پیشنهاد: نام لاتین کالا یا مدل دقیق‌تری را وارد کنید.</i>`
+    );
+  }
+
+  const cheapest = results[0];
+  const medals = ['🥇', '🥈', '🥉'];
+
+  let html = `🛍️ <b>استعلام و مقایسه قیمت: ${escapeHtml(query)}</b>\n\n`;
+  html += `🏆 <b>بهترین و ارزانترین قیمت:</b> <b>${cheapest.source}</b> با قیمت <b>${cheapest.formattedPrice}</b>\n\n`;
+
+  html += `📊 <b>مقایسه قیمتها:</b>\n`;
+  results.forEach((item, index) => {
+    const medal = medals[index] || `• [${index + 1}]`;
+    html += `${medal} <b>${item.source}</b>: ${item.formattedPrice}\n`;
+  });
+
+  // Calculate savings if multiple stores available
+  if (results.length > 1) {
+    const highest = results[results.length - 1];
+    const diff = highest.price - cheapest.price;
+    if (diff > 0) {
+      const diffFormatted = `${diff.toLocaleString('fa-IR')} تومان`;
+      html += `\n💰 <b>اختلاف قیمت بازار (میزان سود خرید از ارزانترین):</b> ${diffFormatted}\n`;
+    }
+  }
+
+  return html.trim();
 }
 
 /**
