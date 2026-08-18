@@ -69,8 +69,8 @@ Your job is to help users find the best deals across Iranian online stores (دی
 Instructions:
 1. When the user asks about any product, gadget, phone, laptop, or item (via text or voice note, with typos, slang, or English names), extract the normalized product query and call the function \`compare_prices\`.
 2. NEVER hallucinate or invent prices, stores, or availability. Rely ONLY on the results returned by \`compare_prices\`.
-3. Respond in polite, fluent, natural Persian using HTML formatting (<b>bold</b>, <i>italic</i>, <code>code</code>, <s>strike</s>).
-4. Do NOT use Markdown or MarkdownV2 symbols (*, _, \`, #) in your final response—use strict HTML tags ONLY to ensure clean rendering on Telegram.
+3. Respond in polite, fluent, natural Persian using ONLY supported Telegram HTML tags: <b>bold</b>, <i>italic</i>, <code>code</code>, <s>strike</s>, and <a href="...">link</a>.
+4. CRITICAL HTML FORMATTING RULE: ONLY use <b>, <i>, <code>, and <a> tags. NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists and structure.
 5. In your response:
    - Highlight the cheapest store and best price clearly.
    - List other store prices for quick comparison.
@@ -324,14 +324,36 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Sanitizes model output by converting basic markdown artifacts into safe Telegram HTML.
+ * Sanitizes model output by converting unsupported HTML/markdown into safe Telegram HTML.
  */
-function cleanHtmlOutput(rawText: string): string {
-  let cleaned = rawText
-    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
-    .replace(/\*(.*?)\*/g, '<i>$1</i>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^#+\s*(.*?)$/gm, '<b>$1</b>');
+export function cleanHtmlOutput(rawText: string): string {
+  if (!rawText) return '';
+
+  let cleaned = rawText;
+
+  // 1. Convert block & list elements to standard text formatting
+  cleaned = cleaned.replace(/<br\s*[\/]?>/gi, '\n');
+  cleaned = cleaned.replace(/<\/?(ul|ol)>/gi, '');
+  cleaned = cleaned.replace(/<li[^>]*>/gi, '• ');
+  cleaned = cleaned.replace(/<\/li>/gi, '\n');
+  cleaned = cleaned.replace(/<\/?(p|div)>/gi, '\n');
+  cleaned = cleaned.replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, '<b>$1</b>\n');
+
+  // 2. Normalize markdown elements to Telegram HTML
+  cleaned = cleaned.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+  cleaned = cleaned.replace(/\*(.*?)\*/g, '<i>$1</i>');
+  cleaned = cleaned.replace(/`([^`]+)`/g, '<code>$1</code>');
+  cleaned = cleaned.replace(/^#+\s*(.*?)$/gm, '<b>$1</b>');
+
+  // 3. Strip any unsupported HTML tags while preserving Telegram-compatible tags:
+  // Allowed: b, strong, i, em, u, ins, s, strike, del, a (with href), code, pre, blockquote
+  cleaned = cleaned.replace(
+    /<(?!\/?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|a(?:\s+href="[^"]*")?)\b)[^>]*>/gi,
+    ''
+  );
+
+  // 4. Normalize multiple blank lines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 
   return cleaned.trim();
 }
@@ -424,7 +446,7 @@ function buildProductInlineKeyboard(
 
 /**
  * Sends response to user as photo message if product image is available,
- * or gracefully falls back to standard text message.
+ * or gracefully falls back to standard HTML text, and finally plain text on entity parsing errors.
  */
 async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promise<void> {
   const replyMarkup =
@@ -433,7 +455,9 @@ async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promis
       : undefined;
 
   const cheapest = result.products && result.products.length > 0 ? result.products[0] : null;
+  const plainText = result.htmlText.replace(/<[^>]*>/g, '').trim();
 
+  // 1. Try sending as photo if valid image URL exists
   if (cheapest && cheapest.imageUrl && cheapest.imageUrl.startsWith('http')) {
     try {
       await ctx.replyWithPhoto(cheapest.imageUrl, {
@@ -443,15 +467,30 @@ async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promis
       });
       return;
     } catch (photoError) {
-      console.warn('Could not send as photo, falling back to text reply:', photoError);
+      console.warn(
+        '[Telegram Bot] Could not send photo with HTML caption, attempting HTML text fallback:',
+        photoError
+      );
     }
   }
 
-  // Standard text message
-  await ctx.reply(result.htmlText, {
-    parse_mode: 'HTML',
-    reply_markup: replyMarkup,
-  });
+  // 2. Attempt sending as HTML text
+  try {
+    await ctx.reply(result.htmlText, {
+      parse_mode: 'HTML',
+      reply_markup: replyMarkup,
+    });
+  } catch (htmlError) {
+    console.warn('[Telegram Bot] HTML parse error, falling back to pure plain text:', htmlError);
+    // 3. Bulletproof fallback: Strip all HTML tags and send as pure plain text
+    try {
+      await ctx.reply(plainText, {
+        reply_markup: replyMarkup,
+      });
+    } catch (plainError) {
+      console.error('[Telegram Bot] Critical failure sending message:', plainError);
+    }
+  }
 }
 
 /**
