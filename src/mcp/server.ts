@@ -7,8 +7,8 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import process from 'node:process';
 import { compareAllPrices, type ProductResult } from '../services/priceService.js';
+import { toAffiliateUrl } from '../utils/affiliate.js';
 
 /**
  * Log helper strictly writing to stderr to protect stdout JSON-RPC stream integrity.
@@ -37,6 +37,7 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   }
 
   const cheapest = results[0];
+  const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
   const markdownParts: string[] = [];
 
@@ -48,7 +49,7 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   markdownParts.push(`- **فروشگاه:** **${cheapest.source}**`);
   markdownParts.push(`- **قیمت:** **${cheapest.formattedPrice}**`);
   markdownParts.push(`- **عنوان محصول:** ${cheapest.title}`);
-  markdownParts.push(`- **لینک مستقیم خرید:** [مشاهده در ${cheapest.source}](${cheapest.url})\n`);
+  markdownParts.push(`- **لینک مستقیم خرید:** [مشاهده در ${cheapest.source}](${cheapestAffiliateUrl})\n`);
 
   // 2. Full Comparison Table
   markdownParts.push(`## 📊 جدول مقایسه قیمت‌ها (Comparison Table)`);
@@ -58,7 +59,8 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   results.forEach((item, index) => {
     const medal = index === 0 ? '🥇 ' : index === 1 ? '🥈 ' : index === 2 ? '🥉 ' : '';
     const statusText = item.isAvailable ? '✅ موجود' : '❌ ناموجود';
-    const linkText = `[خرید از ${item.source}](${item.url})`;
+    const affiliateLink = toAffiliateUrl(item.url, item.source);
+    const linkText = `[خرید از ${item.source}](${affiliateLink})`;
     markdownParts.push(
       `| ${medal}${index + 1} | **${item.source}** | **${item.formattedPrice}** | ${statusText} | ${linkText} |`
     );
@@ -69,7 +71,8 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   // 3. Direct Product Links
   markdownParts.push(`## 🔗 لینک‌های مستقیم فروشگاه‌ها (Direct Links)`);
   results.forEach((item, index) => {
-    markdownParts.push(`${index + 1}. **${item.source}:** [${item.title}](${item.url})`);
+    const affiliateLink = toAffiliateUrl(item.url, item.source);
+    markdownParts.push(`${index + 1}. **${item.source}:** [${item.title}](${affiliateLink})`);
   });
 
   return markdownParts.join('\n');

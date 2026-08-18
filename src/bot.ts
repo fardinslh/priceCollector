@@ -3,6 +3,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import process from 'node:process';
 import { compareAllPrices, type ProductResult } from './services/priceService.js';
+import { toAffiliateUrl } from './utils/affiliate.js';
 
 // Load environment variables
 dotenv.config();
@@ -227,18 +228,22 @@ function buildProductInlineKeyboard(
   if (products.length === 0) {
     // Fallback search buttons if no products directly scraped
     const encoded = encodeURIComponent(searchQuery);
+    const torobSearchUrl = toAffiliateUrl(`https://torob.com/search/?query=${encoded}`, 'Torob');
+    const digikalaSearchUrl = toAffiliateUrl(`https://www.digikala.com/search/?q=${encoded}`, 'Digikala');
+
     keyboard
-      .url('🔍 جستجو در ترب', `https://torob.com/search/?query=${encoded}`)
+      .url('🔍 جستجو در ترب', torobSearchUrl)
       .row()
-      .url('📦 جستجو در دیجی‌کالا', `https://www.digikala.com/search/?q=${encoded}`);
+      .url('📦 جستجو در دیجی‌کالا', digikalaSearchUrl);
     return keyboard;
   }
 
   const cheapest = products[0];
+  const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
   // 1. Cheapest Store primary action button
   keyboard
-    .url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapest.url)
+    .url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl)
     .row();
 
   // 2. Additional store links
@@ -249,25 +254,40 @@ function buildProductInlineKeyboard(
   const secondRowButtons: { text: string; url: string }[] = [];
 
   if (torobItem && torobItem.url !== cheapest.url) {
-    secondRowButtons.push({ text: '🔍 مشاهده در ترب', url: torobItem.url });
+    secondRowButtons.push({
+      text: '🔍 مشاهده در ترب',
+      url: toAffiliateUrl(torobItem.url, 'Torob'),
+    });
   } else if (!torobItem) {
     secondRowButtons.push({
       text: '🔍 جستجو در ترب',
-      url: `https://torob.com/search/?query=${encodeURIComponent(searchQuery)}`,
+      url: toAffiliateUrl(
+        `https://torob.com/search/?query=${encodeURIComponent(searchQuery)}`,
+        'Torob'
+      ),
     });
   }
 
   if (digikalaItem && digikalaItem.url !== cheapest.url) {
-    secondRowButtons.push({ text: '📦 مشاهده در دیجی‌کالا', url: digikalaItem.url });
+    secondRowButtons.push({
+      text: '📦 مشاهده در دیجی‌کالا',
+      url: toAffiliateUrl(digikalaItem.url, 'Digikala'),
+    });
   } else if (!digikalaItem) {
     secondRowButtons.push({
       text: '📦 جستجو در دیجی‌کالا',
-      url: `https://www.digikala.com/search/?q=${encodeURIComponent(searchQuery)}`,
+      url: toAffiliateUrl(
+        `https://www.digikala.com/search/?q=${encodeURIComponent(searchQuery)}`,
+        'Digikala'
+      ),
     });
   }
 
   if (technolifeItem && technolifeItem.url !== cheapest.url) {
-    secondRowButtons.push({ text: '⚡ مشاهده در تکنولایف', url: technolifeItem.url });
+    secondRowButtons.push({
+      text: '⚡ مشاهده در تکنولایف',
+      url: toAffiliateUrl(technolifeItem.url, 'Technolife'),
+    });
   }
 
   // Layout buttons cleanly
