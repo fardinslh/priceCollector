@@ -31,8 +31,8 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   if (!results || results.length === 0) {
     return (
       `## 🔍 نتایج جستجو برای: "${query}"\n\n` +
-      `❌ هیچ محصول فعالی در فروشگاه‌های دیجی‌کالا، ترب، ایمالز، اسنپ‌شاپ و تکنولایف برای این عبارت یافت نشد.\n\n` +
-      `> *No available products found across Iranian e-commerce platforms for query: "${query}".*`
+      `❌ هیچ محصول فعالی در دیجی‌کالا و ترب برای این عبارت یافت نشد.\n\n` +
+      `> *No available products found across Digikala and Torob for query: "${query}".*`
     );
   }
 
@@ -41,7 +41,7 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
 
   const markdownParts: string[] = [];
 
-  markdownParts.push(`# 🛍️ مقایسه قیمت کالا در فروشگاه‌های ایران\n`);
+  markdownParts.push(`# 🛍️ مقایسه قیمت کالا در دیجی‌کالا و ترب\n`);
   markdownParts.push(`**عبارت جستجو شده:** \`${query}\`\n`);
 
   // 1. Cheapest Store Highlight
@@ -57,7 +57,7 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   markdownParts.push(`| :---: | :---: | :---: | :---: | :---: |`);
 
   results.forEach((item, index) => {
-    const medal = index === 0 ? '🥇 ' : index === 1 ? '🥈 ' : index === 2 ? '🥉 ' : '';
+    const medal = index === 0 ? '🥇 ' : index === 1 ? '🥈 ' : '';
     const statusText = item.isAvailable ? '✅ موجود' : '❌ ناموجود';
     const affiliateLink = toAffiliateUrl(item.url, item.source);
     const linkText = `[خرید از ${item.source}](${affiliateLink})`;
@@ -101,7 +101,7 @@ async function main() {
         {
           name: 'compare_prices',
           description:
-            'Searches Digikala, Torob, Emalls, SnappShop, and Technolife in Iran across all categories (electronics, home appliances, apparel, cosmetics, groceries), compares real-time prices, and identifies the cheapest vendor with direct verified product links.',
+            'Searches Digikala and Torob in Iran across all categories (electronics, home appliances, apparel, cosmetics, groceries), compares real-time prices, and identifies the cheapest vendor with direct verified product links.',
           inputSchema: {
             type: 'object',
             properties: {

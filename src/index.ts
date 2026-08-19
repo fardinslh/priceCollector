@@ -7,7 +7,7 @@ import process from 'node:process';
 async function bootstrap() {
   console.log('---------------------------------------------------------');
   console.log('🤖 Iranian Shopping Assistant Telegram Bot is starting...');
-  console.log('⚡ Powered by Gemini AI, GrammY, Digikala, Torob, Emalls, SnappShop & Technolife');
+  console.log('⚡ Powered by Gemini AI, GrammY, Digikala & Torob');
   console.log('---------------------------------------------------------');
 
   // Register official Telegram Bot menu commands

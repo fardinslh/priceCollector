@@ -5,13 +5,10 @@ import process from 'node:process';
  * by appending tracking tags configured in environment variables.
  *
  * @param url Original store or search URL
- * @param source E-commerce store name
+ * @param source E-commerce store name ('Digikala' or 'Torob')
  * @returns Affiliate URL or original URL if no tag is configured / URL is invalid
  */
-export function toAffiliateUrl(
-  url: string,
-  source: 'Digikala' | 'Torob' | 'Technolife' | 'Emalls' | 'SnappShop'
-): string {
+export function toAffiliateUrl(url: string, source: 'Digikala' | 'Torob'): string {
   if (!url || typeof url !== 'string' || !url.startsWith('http')) {
     return url;
   }
@@ -36,36 +33,6 @@ export function toAffiliateUrl(
           parsedUrl.searchParams.set('utm_source', 'affiliate');
           parsedUrl.searchParams.set('utm_campaign', tag);
           parsedUrl.searchParams.set('aff_id', tag);
-        }
-        break;
-      }
-
-      case 'Emalls': {
-        const tag = process.env.EMALLS_AFFILIATE_TAG?.trim();
-        if (tag) {
-          parsedUrl.searchParams.set('utm_source', 'affiliate');
-          parsedUrl.searchParams.set('utm_campaign', tag);
-          parsedUrl.searchParams.set('aff_id', tag);
-        }
-        break;
-      }
-
-      case 'SnappShop': {
-        const tag = process.env.SNAPPSHOP_AFFILIATE_TAG?.trim();
-        if (tag) {
-          parsedUrl.searchParams.set('utm_source', 'affiliate');
-          parsedUrl.searchParams.set('utm_medium', 'affiliate');
-          parsedUrl.searchParams.set('utm_campaign', tag);
-        }
-        break;
-      }
-
-      case 'Technolife': {
-        const tag = process.env.TECHNOLIFE_AFFILIATE_TAG?.trim();
-        if (tag) {
-          parsedUrl.searchParams.set('utm_source', 'affiliate');
-          parsedUrl.searchParams.set('utm_medium', 'affiliate');
-          parsedUrl.searchParams.set('utm_campaign', tag);
         }
         break;
       }

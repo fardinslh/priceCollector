@@ -1,91 +1,77 @@
-import {
-  Bot,
-  InlineKeyboard,
-  Keyboard,
-  InlineQueryResultBuilder,
-  GrammyError,
-  HttpError,
-  type Context,
-} from 'grammy';
-import { GoogleGenAI, Type } from '@google/genai';
+import { Bot, Context, InlineKeyboard, Keyboard, InlineQueryResultBuilder, GrammyError, HttpError } from 'grammy';
+import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import process from 'node:process';
 import { compareAllPrices, type ProductResult } from './services/priceService.js';
 import { toAffiliateUrl } from './utils/affiliate.js';
 
-// Load environment variables
 dotenv.config();
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-// Validate environment variables at boot time
-if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN.trim() === '') {
-  console.error('❌ Boot Error: Missing required environment variable "TELEGRAM_BOT_TOKEN".');
-  process.exit(1);
+if (!TELEGRAM_BOT_TOKEN) {
+  console.warn(
+    '[Telegram Bot] Warning: TELEGRAM_BOT_TOKEN is not set in environment variables. Bot will fail to start.'
+  );
 }
 
-if (!GEMINI_API_KEY || GEMINI_API_KEY.trim() === '') {
-  console.error('❌ Boot Error: Missing required environment variable "GEMINI_API_KEY".');
-  process.exit(1);
+if (!GEMINI_API_KEY) {
+  console.warn(
+    '[Telegram Bot] Warning: GEMINI_API_KEY is not set in environment variables. AI responses will fail.'
+  );
 }
 
-// Initialize Gemini Client
+export const bot = new Bot(TELEGRAM_BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// Initialize Telegram Bot
-export const bot = new Bot(TELEGRAM_BOT_TOKEN);
+/* ==========================================================================
+   Gemini Tool Declarations & System Instructions (Digikala & Torob)
+   ========================================================================== */
 
-/**
- * Gemini Function Calling Tool Declaration
- */
-const comparePricesTool = {
+const comparePricesTool: { functionDeclarations: FunctionDeclaration[] } = {
   functionDeclarations: [
     {
       name: 'compare_prices',
       description:
-        'Searches Digikala, Torob, and Technolife in Iran, compares real-time prices, and identifies the cheapest vendor with direct verified product links.',
+        'Searches and compares real-time prices for products in Iran exclusively across Digikala and Torob.',
       parameters: {
         type: Type.OBJECT,
         properties: {
           query: {
             type: Type.STRING,
             description:
-            'The normalized product search term extracted from user input or voice note (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3", "اتو بخار تفال", "جاروبرقی فیلیپس").',
+              'The normalized product search term extracted from user input or voice note (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3", "سامسونگ S24", "اتو بخار تفال").',
+          },
         },
+        required: ['query'],
       },
-      required: ['query'],
     },
-  },
-],
+  ],
 };
 
 const SYSTEM_INSTRUCTION = `
-You are an expert Persian Shopping & Price Comparison Assistant (موتور هوشمند مقایسه و شکار کمترین قیمت) for all product categories in Iran (لوازم خانگی، پوشاک، کالای دیجیتال، آرایشی، ابزار).
-Your primary objective is to find the absolute CHEAPEST deal among Digikala, Torob, Emalls, SnappShop, and Technolife.
+You are a fast Persian shopping assistant (موتور هوشمند مقایسه و شکار کمترین قیمت). Compare prices exclusively between Digikala and Torob.
 
 Rules:
 1. Always call \`compare_prices\` for product queries.
-2. When tool results return, present the COMPLETE 5-STORE STATUS MATRIX:
- - If available products exist (at least one store has isAvailable: true):
-   🏆 <b>ارزان‌ترین پیشنهاد:</b> [فروشگاه برنده] - [قیمت به تومان]
-   
-   📊 <b>وضعیت کامل فروشگاه‌ها:</b>
-   • <b>دیجی‌کالا (Digikala):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-   • <b>ترب (Torob):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-   • <b>ایمالز (Emalls):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-   • <b>اسنپ‌شاپ (SnappShop):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-   • <b>تکنولایف (Technolife):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-   
-   (If multiple stores are available, mention the price difference / savings between the cheapest and the others).
- - If ALL stores are unavailable (isAvailable: false):
-   Clearly state that the requested product/model is currently NOT available in any of the stores. NEVER hallucinate or present different models/accessories as the requested item.
+2. When tool results return, present the COMPLETE 2-STORE STATUS MATRIX:
+   - If available products exist (at least one store has isAvailable: true):
+     🏆 <b>ارزان‌ترین پیشنهاد:</b> [فروشگاه برنده] - [قیمت به تومان]
+     
+     📊 <b>وضعیت قیمت‌ها:</b>
+     • <b>دیجی‌کالا (Digikala):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+     • <b>ترب (Torob):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+     
+     (If both stores are available and have different prices, mention the savings / difference).
+   - If BOTH stores are unavailable (isAvailable: false):
+     Clearly state that the requested product/model is currently NOT available in Digikala and Torob. NEVER hallucinate or present different models/accessories as the requested item.
 3. Format:
- - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
- - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
- - Keep the tone fast, practical, and helpful.
+   - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
+   - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
+   - Keep the tone fast, concise, and helpful.
 `.trim();
 
 /**
@@ -127,7 +113,7 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
       const args = functionCall.args as { query?: string };
       const extractedQuery = (args?.query || userMessage).trim();
 
-      // Execute cached/live price comparison across Iranian platforms
+      // Execute cached/live price comparison across Digikala and Torob
       const priceResults = await compareAllPrices(extractedQuery);
 
       // 2. Feed tool output back to Gemini for final Persian HTML synthesis
@@ -150,8 +136,7 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
                   name: 'compare_prices',
                   response: {
                     query: extractedQuery,
-                    foundCount: priceResults.length,
-                    results: priceResults,
+                    comparisonResults: priceResults,
                   },
                 },
               },
@@ -160,57 +145,57 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
         ],
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
-          temperature: 0.3,
+          temperature: 0.2,
         },
       });
 
-      const responseText =
-        secondResponse.text ||
-        formatComparisonFallback(extractedQuery, priceResults);
+      const rawHtml =
+        secondResponse.text || formatComparisonFallback(extractedQuery, priceResults);
 
       return {
-        htmlText: cleanHtmlOutput(responseText),
+        htmlText: cleanHtmlOutput(rawHtml),
         products: priceResults,
         searchQuery: extractedQuery,
       };
     }
 
-    // Direct conversational response without tool invocation
-    const directText = response.text || 'متوجه درخواست شما نشدم، لطفاً نام کالا را ارسال کنید.';
+    // Direct conversational reply if no product comparison tool was called
+    const directText =
+      response.text ||
+      'سلام! لطفاً نام کالا یا مدل محصول مورد نظرتان را برای استعلام و مقایسه قیمت ارسال کنید.';
     return {
       htmlText: cleanHtmlOutput(directText),
     };
   } catch (error: any) {
     console.error('Agent execution error:', error?.message || error);
-
-    // Fallback: If Gemini API fails, attempt direct price comparison as backup
+    // Fallback: If Gemini API fails or rate limits, perform standard price search directly
     try {
-      const directResults = await compareAllPrices(userMessage);
-      if (directResults.length > 0) {
-        return {
-          htmlText: formatComparisonFallback(userMessage, directResults),
-          products: directResults,
-          searchQuery: userMessage,
-        };
-      }
+      const fallbackResults = await compareAllPrices(userMessage);
+      return {
+        htmlText: formatComparisonFallback(userMessage, fallbackResults),
+        products: fallbackResults,
+        searchQuery: userMessage,
+      };
     } catch {
-      // Ignore fallback failure
+      return {
+        htmlText: '⚠️ متأسفانه در حال حاضر امکان استعلام قیمت وجود ندارد. لطفاً دقایقی دیگر تلاش کنید.',
+      };
     }
-
-    return {
-      htmlText: '⚠️ متأسفانه در برقراری ارتباط خطایی رخ داد. لطفاً دوباره تلاش کنید.',
-    };
   }
 }
 
 /**
- * Execute Gemini Agent with Multimodal Audio (Voice Message) Input.
+ * Execute Gemini Agent with Multimodal Voice/Audio input.
  */
 export async function runShoppingAgentWithAudio(
-  base64Audio: string,
-  mimeType: string = 'audio/ogg'
+  base64AudioData: string,
+  mimeType = 'audio/ogg'
 ): Promise<AgentResponse> {
   try {
+    const audioPrompt =
+      'Please listen to this voice message in Persian, understand what product the user wants to buy or compare prices for, and extract the clean product name to call `compare_prices`.';
+
+    // 1. Send audio directly to Gemini with tool calling enabled
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: [
@@ -219,12 +204,12 @@ export async function runShoppingAgentWithAudio(
           parts: [
             {
               inlineData: {
-                data: base64Audio,
+                data: base64AudioData,
                 mimeType,
               },
             },
             {
-              text: 'لطفاً به این پیام صوتی گوش بده، اگر کاربر نام محصولی را برای استعلام یا مقایسه قیمت اعلام کرده است، نام دقیق آن را استخراج کن و تابع compare_prices را فراخوانی کن.',
+              text: audioPrompt,
             },
           ],
         },
@@ -242,61 +227,50 @@ export async function runShoppingAgentWithAudio(
 
     if (functionCall && functionCall.name === 'compare_prices') {
       const args = functionCall.args as { query?: string };
-      const extractedQuery = (args?.query || '').trim();
+      const extractedQuery = (args?.query || 'کالای درخواستی').trim();
 
-      if (extractedQuery) {
-        const priceResults = await compareAllPrices(extractedQuery);
+      const priceResults = await compareAllPrices(extractedQuery);
 
-        const secondResponse = await ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  inlineData: {
-                    data: base64Audio,
-                    mimeType,
-                  },
-                },
-              ],
-            },
-            {
-              role: 'model',
-              parts: [{ functionCall }],
-            },
-            {
-              role: 'user',
-              parts: [
-                {
-                  functionResponse: {
-                    name: 'compare_prices',
-                    response: {
-                      query: extractedQuery,
-                      foundCount: priceResults.length,
-                      results: priceResults,
-                    },
-                  },
-                },
-              ],
-            },
-          ],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            temperature: 0.3,
+      const secondResponse = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `کاربر در پیام صوتی این محصول را درخواست کرده بود: ${extractedQuery}` }],
           },
-        });
+          {
+            role: 'model',
+            parts: [{ functionCall }],
+          },
+          {
+            role: 'user',
+            parts: [
+              {
+                functionResponse: {
+                  name: 'compare_prices',
+                  response: {
+                    query: extractedQuery,
+                    comparisonResults: priceResults,
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          temperature: 0.2,
+        },
+      });
 
-        const responseText =
-          secondResponse.text ||
-          formatComparisonFallback(extractedQuery, priceResults);
+      const rawHtml =
+        secondResponse.text || formatComparisonFallback(extractedQuery, priceResults);
 
-        return {
-          htmlText: cleanHtmlOutput(responseText),
-          products: priceResults,
-          searchQuery: extractedQuery,
-        };
-      }
+      return {
+        htmlText: cleanHtmlOutput(rawHtml),
+        products: priceResults,
+        searchQuery: extractedQuery,
+      };
     }
 
     const directText =
@@ -325,20 +299,17 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Generates structured Persian HTML comparison summary with strict lowest price highlight and full 5-store status matrix.
+ * Generates structured Persian HTML comparison summary with strict lowest price highlight for Digikala & Torob.
  */
 export function formatComparisonFallback(query: string, results: ProductResult[]): string {
   const availableItems = results.filter((r) => r.isAvailable && r.price > 0);
   const digikalaItem = results.find((r) => r.source === 'Digikala');
   const torobItem = results.find((r) => r.source === 'Torob');
-  const emallsItem = results.find((r) => r.source === 'Emalls');
-  const snappShopItem = results.find((r) => r.source === 'SnappShop');
-  const technolifeItem = results.find((r) => r.source === 'Technolife');
 
   if (availableItems.length === 0) {
     return (
       `🔍 <b>استعلام قیمت برای:</b> <code>${escapeHtml(query)}</code>\n\n` +
-      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در فروشگاه‌های معتبر (دیجی‌کالا، ترب، ایمالز، اسنپ‌شاپ، تکنولایف) موجود نیست یا یافت نشد.\n\n` +
+      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در دیجی‌کالا و ترب موجود نیست یا یافت نشد.\n\n` +
       `💡 <i>پیشنهاد: مدل مشخص‌تر یا نام دقیق کالا را ارسال کنید.</i>`
     );
   }
@@ -348,12 +319,9 @@ export function formatComparisonFallback(query: string, results: ProductResult[]
   let html = `🛍️ <b>استعلام و مقایسه قیمت: ${escapeHtml(query)}</b>\n\n`;
   html += `🏆 <b>ارزان‌ترین پیشنهاد:</b> <b>${cheapest.source}</b> با قیمت <b>${cheapest.formattedPrice}</b>\n\n`;
 
-  html += `📊 <b>وضعیت کامل فروشگاه‌ها:</b>\n`;
+  html += `📊 <b>وضعیت قیمت‌ها:</b>\n`;
   html += `• <b>دیجی‌کالا (Digikala):</b> ${digikalaItem?.isAvailable ? `<b>${digikalaItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
   html += `• <b>ترب (Torob):</b> ${torobItem?.isAvailable ? `<b>${torobItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
-  html += `• <b>ایمالز (Emalls):</b> ${emallsItem?.isAvailable ? `<b>${emallsItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
-  html += `• <b>اسنپ‌شاپ (SnappShop):</b> ${snappShopItem?.isAvailable ? `<b>${snappShopItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
-  html += `• <b>تکنولایف (Technolife):</b> ${technolifeItem?.isAvailable ? `<b>${technolifeItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
 
   if (availableItems.length > 1) {
     const highest = availableItems[availableItems.length - 1];
@@ -402,7 +370,7 @@ export function cleanHtmlOutput(rawText: string): string {
 }
 
 /**
- * Builds interactive Telegram InlineKeyboard buttons for product search results (2 columns grid).
+ * Builds interactive Telegram InlineKeyboard buttons for product search results.
  */
 function buildProductInlineKeyboard(
   products: ProductResult[],
@@ -414,9 +382,6 @@ function buildProductInlineKeyboard(
   const availableItems = products.filter((p) => p.isAvailable && p.price > 0);
   const digikalaItem = products.find((p) => p.source === 'Digikala');
   const torobItem = products.find((p) => p.source === 'Torob');
-  const emallsItem = products.find((p) => p.source === 'Emalls');
-  const snappShopItem = products.find((p) => p.source === 'SnappShop');
-  const technolifeItem = products.find((p) => p.source === 'Technolife');
 
   if (availableItems.length === 0) {
     // Fallback search buttons if no products available
@@ -425,20 +390,6 @@ function buildProductInlineKeyboard(
       .url(
         '📦 جستجو در دیجی‌کالا',
         toAffiliateUrl(`https://www.digikala.com/search/?q=${encoded}`, 'Digikala')
-      )
-      .row()
-      .url(
-        '🏷️ جستجو در ایمالز',
-        toAffiliateUrl(`https://emalls.ir/Search.aspx?query=${encoded}`, 'Emalls')
-      )
-      .url(
-        '🛍️ جستجو در اسنپ‌شاپ',
-        toAffiliateUrl(`https://snappshop.ir/search?q=${encoded}`, 'SnappShop')
-      )
-      .row()
-      .url(
-        '⚡ جستجو در تکنولایف',
-        toAffiliateUrl(`https://www.technolife.ir/product/search?keyword=${encoded}`, 'Technolife')
       );
     return keyboard;
   }
@@ -446,50 +397,22 @@ function buildProductInlineKeyboard(
   const cheapest = availableItems[0];
   const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
-  // 1. Cheapest Store primary action button
+  // Button 1 (Row 1): Cheapest Store primary action button
   keyboard.url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl).row();
 
-  // 2. Individual store links arranged in a clean 2-column grid
-  const storeButtons: { text: string; url: string }[] = [];
-
+  // Button 2 & 3 (Row 2): Direct/Search links for Digikala and Torob
   const digikalaUrl = digikalaItem?.url || `https://www.digikala.com/search/?q=${encoded}`;
-  storeButtons.push({
-    text: digikalaItem?.isAvailable ? '📦 دیجی‌کالا' : '📦 دیجی‌کالا',
-    url: toAffiliateUrl(digikalaUrl, 'Digikala'),
-  });
-
   const torobUrl = torobItem?.url || `https://torob.com/search/?query=${encoded}`;
-  storeButtons.push({
-    text: torobItem?.isAvailable ? '🔍 ترب' : '🔍 ترب',
-    url: toAffiliateUrl(torobUrl, 'Torob'),
-  });
 
-  const emallsUrl = emallsItem?.url || `https://emalls.ir/Search.aspx?query=${encoded}`;
-  storeButtons.push({
-    text: emallsItem?.isAvailable ? '🏷️ ایمالز' : '🏷️ ایمالز',
-    url: toAffiliateUrl(emallsUrl, 'Emalls'),
-  });
-
-  const snappShopUrl = snappShopItem?.url || `https://snappshop.ir/search?q=${encoded}`;
-  storeButtons.push({
-    text: snappShopItem?.isAvailable ? '🛍️ اسنپ‌شاپ' : '🛍️ اسنپ‌شاپ',
-    url: toAffiliateUrl(snappShopUrl, 'SnappShop'),
-  });
-
-  const technolifeUrl =
-    technolifeItem?.url || `https://www.technolife.ir/product/search?keyword=${encoded}`;
-  storeButtons.push({
-    text: technolifeItem?.isAvailable ? '⚡ تکنولایف' : '⚡ تکنولایف',
-    url: toAffiliateUrl(technolifeUrl, 'Technolife'),
-  });
-
-  for (let i = 0; i < storeButtons.length; i += 2) {
-    keyboard.url(storeButtons[i].text, storeButtons[i].url);
-    if (i + 1 < storeButtons.length) {
-      keyboard.url(storeButtons[i + 1].text, storeButtons[i + 1].url);
-    }
-    keyboard.row();
-  }
+  keyboard
+    .url(
+      digikalaItem?.isAvailable ? '📦 دیجی‌کالا' : '📦 جستجو در دیجی‌کالا',
+      toAffiliateUrl(digikalaUrl, 'Digikala')
+    )
+    .url(
+      torobItem?.isAvailable ? '🔍 ترب' : '🔍 جستجو در ترب',
+      toAffiliateUrl(torobUrl, 'Torob')
+    );
 
   return keyboard;
 }
@@ -580,10 +503,10 @@ bot.command('start', async (ctx: Context) => {
   const welcomeMessage = `
 👋 <b>سلام! به ربات هوشمند مقایسه قیمت (مفت‌بر) خوش آمدید.</b>
 
-من دستیار هوشمند شما برای پیدا کردن بهترین و ارزان‌ترین قیمت‌ها در فروشگاه‌های معتبر ایران (<b>دیجی‌کالا</b>، <b>ترب</b>، <b>ایمالز</b>، <b>اسنپ‌شاپ</b> و <b>تکنولایف</b>) در تمام دسته‌بندی‌ها (دیجیتال، لوازم خانگی، پوشاک و آرایشی) هستم.
+من دستیار هوشمند شما برای پیدا کردن بهترین و ارزان‌ترین قیمت‌ها در <b>دیجی‌کالا</b> و <b>ترب</b> هستم.
 
 🔍 <b>روش‌های استفاده:</b>
-1️⃣ <b>ارسال متن:</b> نام کالا را تایپ کنید (مثلاً: <code>آیفون 13</code> یا <code>اتو بخار تفال</code>).
+1️⃣ <b>ارسال متن:</b> نام کالا را تایپ کنید (مثلاً: <code>آیفون 13</code> یا <code>سامسونگ S24</code>).
 2️⃣ <b>ارسال وویس:</b> نام کالا را با ویس بگویید، هوش مصنوعی سریعاً آن را تشخیص داده و قیمت‌ها را استخراج می‌کند.
 3️⃣ <b>حالت اینلاین (Inline):</b> در هر چت یا گروهی کافیست بنویسید <code>@${ctx.me?.username || 'botname'} [نام کالا]</code>.
 
@@ -607,9 +530,6 @@ bot.command('help', async (ctx: Context) => {
 4️⃣ <b>فروشگاه‌های تحت پوشش:</b>
    • دیجی‌کالا (Digikala)
    • ترب (Torob)
-   • ایمالز (Emalls)
-   • اسنپ‌شاپ (SnappShop)
-   • تکنولایف (Technolife)
 
 💡 <i>نکته: قیمت‌ها در حافظه کش ۱۵ دقیقه‌ای ذخیره می‌شوند تا پاسخ‌ها فوری و زیر ثانیه ارسال شوند.</i>
 `.trim();
@@ -627,7 +547,7 @@ bot.on('message:text', async (ctx: Context) => {
   // Handle help button from suggestion keyboard
   if (text === 'ℹ️ راهنما') {
     return ctx.reply(
-      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا <code>اتو بخار تفال</code> یا یک وویس بفرستید).',
+      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا <code>مک‌بوک پرو M4</code> یا یک وویس بفرستید).',
       { parse_mode: 'HTML' }
     );
   }
@@ -639,7 +559,7 @@ bot.on('message:text', async (ctx: Context) => {
   let loadingMsg: any = null;
   try {
     loadingMsg = await ctx.reply(
-      '🔍 <b>در حال جستجو و مقایسه قیمت‌ها از دیجی‌کالا، ترب، ایمالز، اسنپ‌شاپ و تکنولایف...</b> ⏳',
+      '🔍 <b>در حال جستجو و مقایسه قیمت‌ها از دیجی‌کالا و ترب...</b> ⏳',
       { parse_mode: 'HTML' }
     );
   } catch {
@@ -679,7 +599,7 @@ bot.on('message:voice', async (ctx: Context) => {
   let loadingMsg: any = null;
   try {
     loadingMsg = await ctx.reply(
-      '🎙️ <b>در حال پردازش پیام صوتی و استعلام هوشمند قیمت‌ها...</b> ⏳',
+      '🎙️ <b>در حال پردازش پیام صوتی و استعلام قیمت از دیجی‌کالا و ترب...</b> ⏳',
       { parse_mode: 'HTML' }
     );
   } catch {
@@ -757,11 +677,11 @@ bot.on('inline_query', async (ctx: Context) => {
         'not_found',
         `❌ محصول "${query}" یافت نشد`,
         {
-          description: 'هیچ کالای فعالی در دیجی‌کالا، ترب و تکنولایف پیدا نشد.',
+          description: 'هیچ کالای فعالی در دیجی‌کالا و ترب پیدا نشد.',
           reply_markup: buildProductInlineKeyboard(products, query),
         }
       ).text(
-        `❌ متأسفانه محصول <b>${escapeHtml(query)}</b> در حال حاضر در هیچ‌یک از ۳ فروشگاه معتبر (دیجی‌کالا، ترب، تکنولایف) موجود نیست یا یافت نشد.`,
+        `❌ متأسفانه محصول <b>${escapeHtml(query)}</b> در حال حاضر در دیجی‌کالا و ترب موجود نیست یا یافت نشد.`,
         { parse_mode: 'HTML' }
       );
 
