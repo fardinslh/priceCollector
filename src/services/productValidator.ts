@@ -173,18 +173,88 @@ export const KNOWN_SERIES = [
 ];
 
 /**
- * Detects if a product title is an accessory using strict word boundaries to avoid false positives (e.g. "قابل حمل" or "برند").
+ * Detects if a product title is an accessory using strict structural and contextual checks.
+ * Distinguishes between actual devices (e.g. smartwatches with "بند سیلیکون") and accessory parts.
  */
 export function isAccessoryProduct(title: string, query: string): boolean {
   const t = title.toLowerCase();
   const q = query.toLowerCase();
 
-  for (const acc of ACCESSORY_KEYWORDS) {
-    if (q.includes(acc)) {
-      return false; // User explicitly asked for the accessory
-    }
-    const regex = new RegExp(`(^|[\\s\\/_–—-])${acc}($|[\\s\\/_–—-])`, 'iu');
-    if (regex.test(t)) {
+  // If user explicitly asked for the accessory (e.g. "بند ساعت گلوریمی"), do not flag as accessory
+  const isQueryForAccessory = [
+    'بند',
+    'قاب',
+    'کاور',
+    'گلس',
+    'محافظ',
+    'کابل',
+    'شارژر',
+    'هولدر',
+    'استند',
+    'strap',
+    'case',
+    'cover',
+    'glass',
+  ].some((acc) => q.includes(acc));
+
+  if (isQueryForAccessory) {
+    return false;
+  }
+
+  // 1. Check for "مناسب برای" / "سازگار با" (e.g. "بند ... مناسب برای ساعت هوشمند گلوریمی", "کاور ... مناسب برای آیفون")
+  if (/(?:مناسب برای|مناسب|سازگار با|مخصوص)\s+/i.test(t)) {
+    return true;
+  }
+
+  // 2. Check if title starts with an accessory keyword
+  const startsWithAccessory =
+    /^(?:بند|قاب|کاور|گلس|محافظ|کابل|شارژر|پد|استند|هولدر|پایه نگهدارنده|تبدیل|مونوپاد|استیکر|برچسب|کیف|آستین|سرفصل|سری)\s+/i.test(
+      t.trim()
+    );
+  if (startsWithAccessory) {
+    return true;
+  }
+
+  // 3. Smartwatch with included strap in box (e.g. "ساعت هوشمند گلوریمی مدل M2 MAX LTD ... بند سیلیکون")
+  const isMainSmartwatch =
+    /^(?:ساعت\s*هوشمند|ساعت\s*مچی|smartwatch|smart\s*watch)\s+/i.test(t.trim());
+  if (isMainSmartwatch) {
+    // If it's a main smartwatch, "بند سیلیکون" or "بند چرم" in title is just strap material
+    return false;
+  }
+
+  // 4. Main smartphone / laptop / tablet / console
+  const isMainDevice =
+    /^(?:گوشی|موبایل|لپ\s*تاپ|تبلت|کنسول|تلویزیون|اسپیکر|هدفون|هندزفری)\s+/i.test(t.trim());
+  if (isMainDevice) {
+    return false;
+  }
+
+  // 5. Fallback keyword check for generic titles
+  const standaloneAccessoryKeywords = [
+    'محافظ صفحه نمایش',
+    'محافظ صفحه',
+    'محافظ لنز',
+    'محافظ پشت',
+    'محافظ دوربین',
+    'گلس',
+    'کاور',
+    'کیف گوشی',
+    'کیف تبلت',
+    'شارژر دیواری',
+    'شارژر فندکی',
+    'کابل شارژ',
+    'screen protector',
+    'lens protector',
+    'phone case',
+    'silicone case',
+    'leather case',
+    'watch strap',
+    'charging cable',
+  ];
+
+  for (const acc of standaloneAccessoryKeywords) {
+    if (t.includes(acc)) {
       return true;
     }
   }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { fileURLToPath, URL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import path from 'node:path';
 import process from 'node:process';
 import { priceCache } from './cacheService.js';
 import { learningEngine } from './learningEngine.js';
@@ -218,11 +219,29 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
     .replace(/(?:^|\s)(پلی\s*استیشن|پلی‌استیشن|پلیستیشن)(?:\s|$)/gi, ' PlayStation ')
     .replace(/(?:^|\s)(ردمی)(?:\s|$)/gi, ' Redmi ')
     .replace(/(?:^|\s)(پوکو)(?:\s|$)/gi, ' Poco ')
+    .replace(/(?:^|\s)(گلوریمی)(?:\s|$)/gi, ' Glorimi ')
+    .replace(/(?:^|\s)(هایلو)(?:\s|$)/gi, ' Haylou ')
+    .replace(/(?:^|\s)(میبرو)(?:\s|$)/gi, ' Mibro ')
+    .replace(/(?:^|\s)(امیزفیت)(?:\s|$)/gi, ' Amazfit ')
+    .replace(/(?:^|\s)(کیوسی‌وای|کیوسای|کیو سی وای)(?:\s|$)/gi, ' QCY ')
+    .replace(/(?:^|\s)(گرین\s*لاین)(?:\s|$)/gi, ' Green Lion ')
+    .replace(/(?:^|\s)(انکر)(?:\s|$)/gi, ' Anker ')
+    .replace(/(?:^|\s)(ساندکور|ساند\s*کور)(?:\s|$)/gi, ' Soundcore ')
+    .replace(/(?:^|\s)(باسئوس|بیسوس)(?:\s|$)/gi, ' Baseus ')
+    .replace(/(?:^|\s)(ایسوس)(?:\s|$)/gi, ' ASUS ')
+    .replace(/(?:^|\s)(لنوو)(?:\s|$)/gi, ' Lenovo ')
+    .replace(/(?:^|\s)(سرفیس)(?:\s|$)/gi, ' Surface ')
+    .replace(/(?:^|\s)(مایکروسافت)(?:\s|$)/gi, ' Microsoft ')
     .replace(/(?:^|\s)(تفال)(?:\s|$)/gi, ' Tefal ')
     .replace(/(?:^|\s)(فیلیپس)(?:\s|$)/gi, ' Philips ')
     .replace(/(?:^|\s)(بوش)(?:\s|$)/gi, ' Bosch ')
     .replace(/(?:^|\s)(براون)(?:\s|$)/gi, ' Braun ')
     .replace(/(?:^|\s)(پاناسونیک)(?:\s|$)/gi, ' Panasonic ')
+    .replace(/(?:^|\s)(هواوی)(?:\s|$)/gi, ' Huawei ')
+    .replace(/(?:^|\s)(آنر)(?:\s|$)/gi, ' Honor ')
+    .replace(/(?:^|\s)(وان\s*پلاس|وانپلاس)(?:\s|$)/gi, ' OnePlus ')
+    .replace(/(?:^|\s)(ریلمی)(?:\s|$)/gi, ' Realme ')
+    .replace(/(?:^|\s)(سونی)(?:\s|$)/gi, ' Sony ')
     .replace(/(?:^|\s)(گیگابایت|گیگ|gig)(?:\s|$)/gi, 'GB ')
     .replace(/(?:^|\s)(ترابایت)(?:\s|$)/gi, 'TB ')
     .replace(/(?:^|\s)(هندزفری|هدفون|گوشی)(?:\s|$)/gi, ' ')
@@ -355,13 +374,40 @@ const DigikalaResponseSchema = z.object({
     .default({ products: [] }),
 });
 
+export async function fetchDigikalaApi(apiUrl: string): Promise<any> {
+  const cookiePath = path.resolve(process.cwd(), 'data/digi_cookie.txt');
+  try {
+    const { stdout } = await execFileAsync('curl.exe', [
+      '-s',
+      '-L',
+      '--compressed',
+      '-c', cookiePath,
+      '-b', cookiePath,
+      '--max-time', '8',
+      '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      '-H', 'Accept: application/json, text/plain, */*',
+      '-H', 'Referer: https://www.digikala.com/',
+      apiUrl,
+    ]);
+
+    if (stdout && stdout.trim().startsWith('{')) {
+      return JSON.parse(stdout);
+    }
+  } catch {
+    // Fallback to fetchWithRedirection
+  }
+
+  const response = await fetchWithRedirection(apiUrl, { headers: digikalaHeaders });
+  return response.data;
+}
+
 async function fetchDigikalaSingleQuery(query: string): Promise<ProductResult | null> {
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://www.digikala.com/search/?q=${encodedQuery}`;
   const apiUrl = `https://api.digikala.com/v1/search/?q=${encodedQuery}&page=1`;
 
-  const response = await fetchWithRedirection(apiUrl, { headers: digikalaHeaders });
-  const parsedData = DigikalaResponseSchema.safeParse(response.data);
+  const rawData = await fetchDigikalaApi(apiUrl);
+  const parsedData = DigikalaResponseSchema.safeParse(rawData);
 
   if (!parsedData.success || !parsedData.data.data.products.length) {
     return null;
