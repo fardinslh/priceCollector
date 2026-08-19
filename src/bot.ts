@@ -376,11 +376,8 @@ async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promis
         reply_markup: replyMarkup,
       });
       return;
-    } catch (photoError) {
-      console.warn(
-        '[Telegram Bot] Could not send photo with HTML caption, attempting HTML text fallback:',
-        photoError
-      );
+    } catch {
+      // Remote image might be webp or protected by CDN, gracefully fall back to HTML message
     }
   }
 
