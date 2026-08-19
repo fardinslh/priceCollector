@@ -278,6 +278,25 @@ export function matchesBrand(title: string, query: string): boolean {
     }
   }
 
+  const isPlayStationQuery = ['ps5', 'ps4', 'playstation', 'پلی استیشن', 'پلی‌استیشن'].some((k) => q.includes(k));
+  if (isPlayStationQuery) {
+    if (!t.includes('ps5') && !t.includes('ps4') && !t.includes('playstation') && !t.includes('پلی استیشن') && !t.includes('سونی') && !t.includes('sony')) {
+      return false;
+    }
+    const nonConsole = ['مودم', 'modem', 'روتر', 'router', 'cpe', 'سیمکارت', 'هواوی', 'huawei'];
+    if (nonConsole.some((nc) => t.includes(nc))) {
+      return false;
+    }
+  }
+
+  const isJBLQuery = ['jbl', 'جی بی ال'].some((k) => q.includes(k));
+  if (isJBLQuery) {
+    const nonJBL = ['سامسونگ', 'سونی', 'انکر', 'anker', 'تسکو', 'tsco'];
+    if (nonJBL.some((b) => t.includes(b))) {
+      return false;
+    }
+  }
+
   return true;
 }
 

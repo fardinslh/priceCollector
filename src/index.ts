@@ -1,5 +1,6 @@
-import { bot, initBotCommands } from './bot.js';
+import { bot, registerBotCommands, startBot } from './bot.js';
 import process from 'node:process';
+import { alertService } from './services/alertService.js';
 
 /**
  * Main application entry point to start the Telegram Shopping Assistant Bot.
@@ -7,11 +8,14 @@ import process from 'node:process';
 async function bootstrap() {
   console.log('---------------------------------------------------------');
   console.log('🤖 Iranian Shopping Assistant Telegram Bot is starting...');
-  console.log('⚡ Powered by Gemini AI, GrammY, Digikala & Torob');
+  console.log('⚡ Powered by Gemini AI, GrammY, Digikala, Torob & Zoomit');
   console.log('---------------------------------------------------------');
 
   // Register official Telegram Bot menu commands
-  await initBotCommands();
+  await registerBotCommands();
+
+  // Start periodic price drop alert tracker (every 60 minutes)
+  alertService.startBackgroundTracker(bot, 60);
 
   // Handle graceful shutdown
   const stopBot = async (signal: string) => {

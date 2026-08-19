@@ -3,8 +3,11 @@ import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import process from 'node:process';
-import { compareAllPrices, type ProductResult } from './services/priceService.js';
+import { compareAllPrices, formatTomanPrice, type ProductResult } from './services/priceService.js';
 import { toAffiliateUrl } from './utils/affiliate.js';
+import { alertService } from './services/alertService.js';
+import { generatePriceChartUrl } from './services/chartService.js';
+import { isComparisonQuery, parseComparisonItems, compareTwoProducts } from './services/comparisonService.js';
 
 dotenv.config();
 
@@ -28,7 +31,7 @@ export const bot = new Bot(TELEGRAM_BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 /* ==========================================================================
-   Gemini Tool Declarations & System Instructions (Digikala & Torob)
+   Gemini Tool Declarations & System Instructions
    ========================================================================== */
 
 const comparePricesTool: { functionDeclarations: FunctionDeclaration[] } = {
@@ -36,14 +39,14 @@ const comparePricesTool: { functionDeclarations: FunctionDeclaration[] } = {
     {
       name: 'compare_prices',
       description:
-        'Searches and compares real-time prices for products in Iran exclusively across Digikala and Torob.',
+        'Searches and compares real-time prices for products in Iran across Digikala, Torob, and Zoomit.',
       parameters: {
         type: Type.OBJECT,
         properties: {
           query: {
             type: Type.STRING,
             description:
-              'The normalized product search term extracted from user input or voice note (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3", "سامسونگ S24", "اتو بخار تفال").',
+              'The normalized product search term extracted from user input or voice note (e.g. "iPhone 16 Pro Max", "AirPods Pro 2", "MacBook Air M3", "سامسونگ S24", "JBL Charge 6").',
           },
         },
         required: ['query'],
@@ -53,30 +56,28 @@ const comparePricesTool: { functionDeclarations: FunctionDeclaration[] } = {
 };
 
 const SYSTEM_INSTRUCTION = `
-You are a fast Persian shopping assistant (موتور هوشمند مقایسه و شکار کمترین قیمت). Compare prices exclusively between Digikala and Torob.
+You are a fast Persian shopping assistant (موتور هوشمند مقایسه و استعلام کمترین قیمت). Compare prices across Digikala, Torob, and Zoomit.
 
 Rules:
 1. Always call \`compare_prices\` for product queries.
-2. When tool results return, present the COMPLETE 2-STORE STATUS MATRIX:
+2. When tool results return, present the COMPLETE STATUS MATRIX:
    - If available products exist (at least one store has isAvailable: true):
      🏆 <b>ارزان‌ترین پیشنهاد:</b> [فروشگاه برنده] - [قیمت به تومان]
      
      📊 <b>وضعیت قیمت‌ها:</b>
      • <b>دیجی‌کالا (Digikala):</b> [قیمت یا ❌ ناموجود / یافت نشد]
      • <b>ترب (Torob):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+     • <b>زومیت (Zoomit):</b> [مشخصات و قیمت در زومیت]
      
-     (If both stores are available and have different prices, mention the savings / difference).
-   - If BOTH stores are unavailable (isAvailable: false):
-     Clearly state that the requested product/model is currently NOT available in Digikala and Torob. NEVER hallucinate or present different models/accessories as the requested item.
+     (If multiple stores are available, mention the savings / difference).
+   - If all stores are unavailable:
+     Clearly state that the requested product/model is currently NOT available.
 3. Format:
    - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
    - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
    - Keep the tone fast, concise, and helpful.
 `.trim();
 
-/**
- * Result structure returned by the agent pipeline.
- */
 export interface AgentResponse {
   htmlText: string;
   products?: ProductResult[];
@@ -90,7 +91,6 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
   const trimmed = userMessage.trim();
 
   try {
-    // 1. Ask Gemini to identify product name and intent
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: [
@@ -100,72 +100,138 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
         },
       ],
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
         tools: [comparePricesTool],
+        systemInstruction: SYSTEM_INSTRUCTION,
         temperature: 0.1,
       },
     });
 
-    const candidates = response.candidates;
-    const firstPart = candidates?.[0]?.content?.parts?.[0];
-    const functionCall = firstPart?.functionCall;
+    const candidate = response.candidates?.[0];
+    const modelParts = candidate?.content?.parts || [];
 
-    // If Gemini identified product query or requested compare_prices
-    if (functionCall && functionCall.name === 'compare_prices') {
-      const args = functionCall.args as { query?: string };
-      const extractedQuery = (args?.query || trimmed).trim();
+    const toolCall = modelParts.find((part) => part.functionCall);
 
-      const priceResults = await compareAllPrices(extractedQuery);
-      const htmlText = formatComparisonFallback(extractedQuery, priceResults);
+    if (toolCall && toolCall.functionCall) {
+      const { name, args } = toolCall.functionCall;
 
+      if (name === 'compare_prices') {
+        const query = (args as { query: string }).query || trimmed;
+        const products = await compareAllPrices(query);
+        const fallbackText = formatComparisonFallback(query, products);
+
+        return {
+          htmlText: fallbackText,
+          products,
+          searchQuery: query,
+        };
+      }
+    }
+
+    const rawReply = response.text || '';
+    if (rawReply) {
       return {
-        htmlText: cleanHtmlOutput(htmlText),
-        products: priceResults,
-        searchQuery: extractedQuery,
+        htmlText: cleanHtmlOutput(rawReply),
       };
     }
 
-    // Direct conversational reply if query was just a greeting or question
-    if (response.text && response.text.trim()) {
-      return {
-        htmlText: cleanHtmlOutput(response.text),
-      };
-    }
-
-    // Fallback: execute direct search
-    const fallbackResults = await compareAllPrices(trimmed);
+    const fallbackProducts = await compareAllPrices(trimmed);
     return {
-      htmlText: formatComparisonFallback(trimmed, fallbackResults),
-      products: fallbackResults,
+      htmlText: formatComparisonFallback(trimmed, fallbackProducts),
+      products: fallbackProducts,
       searchQuery: trimmed,
     };
-  } catch (error: any) {
-    console.warn('[Telegram Bot] Gemini intent recognition skipped/failed, executing direct ground-truth comparison:', error?.message || error);
-    try {
-      const fallbackResults = await compareAllPrices(trimmed);
-      return {
-        htmlText: formatComparisonFallback(trimmed, fallbackResults),
-        products: fallbackResults,
-        searchQuery: trimmed,
-      };
-    } catch {
-      return {
-        htmlText: '⚠️ متأسفانه در حال حاضر امکان استعلام قیمت وجود ندارد. لطفاً دقایقی دیگر تلاش کنید.',
-      };
-    }
+  } catch (error) {
+    console.error('[Gemini Agent] Error executing Gemini model, running fallback parser:', error);
+    const fallbackProducts = await compareAllPrices(trimmed);
+    return {
+      htmlText: formatComparisonFallback(trimmed, fallbackProducts),
+      products: fallbackProducts,
+      searchQuery: trimmed,
+    };
   }
 }
 
 /**
- * Execute Gemini Agent with Multimodal Voice/Audio input.
+ * Execute Multimodal Gemini Agent with Voice/Audio File.
  */
 export async function runShoppingAgentWithAudio(
-  base64AudioData: string,
-  mimeType = 'audio/ogg'
+  base64Audio: string,
+  mimeType: string
 ): Promise<AgentResponse> {
   try {
-    const audioPrompt =
-      'Please listen to this voice message in Persian, understand what product the user wants to buy or compare prices for, and extract the clean product name to call `compare_prices`.';
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                data: base64Audio,
+                mimeType: mimeType,
+              },
+            },
+            {
+              text: 'Extract the product name the user wants to buy or compare prices for in Iran. Call compare_prices function with the extracted product name.',
+            },
+          ],
+        },
+      ],
+      config: {
+        tools: [comparePricesTool],
+        systemInstruction: SYSTEM_INSTRUCTION,
+        temperature: 0.1,
+      },
+    });
+
+    const candidate = response.candidates?.[0];
+    const modelParts = candidate?.content?.parts || [];
+    const toolCall = modelParts.find((part) => part.functionCall);
+
+    if (toolCall && toolCall.functionCall) {
+      const { name, args } = toolCall.functionCall;
+      if (name === 'compare_prices') {
+        const query = (args as { query: string }).query || 'کالای صوتی';
+        const products = await compareAllPrices(query);
+        const fallbackText = formatComparisonFallback(query, products);
+
+        return {
+          htmlText: fallbackText,
+          products,
+          searchQuery: query,
+        };
+      }
+    }
+
+    const rawReply = response.text || '';
+    if (rawReply) {
+      return { htmlText: cleanHtmlOutput(rawReply) };
+    }
+
+    return {
+      htmlText: '⚠️ متأسفانه متوجه نام محصول در پیام صوتی شما نشدم. لطفاً نام کالا را به صورت متنی ارسال فرمایید.',
+    };
+  } catch (error) {
+    console.error('[Gemini Audio Agent] Error:', error);
+    return {
+      htmlText: '⚠️ در پردازش پیام صوتی خطایی رخ داد. لطفاً نام محصول را به صورت متنی تایپ کنید.',
+    };
+  }
+}
+
+/**
+ * Execute Multimodal Gemini Agent with Photo/Image.
+ */
+export async function runShoppingAgentWithPhoto(
+  base64Image: string,
+  mimeType: string
+): Promise<AgentResponse> {
+  try {
+    const prompt = `
+You are an expert Iranian tech & product identifier.
+Look at this image (which may be a product, box, label, invoice, or screenshot) and identify the EXACT product name and model in English and Persian.
+Return ONLY JSON: {"productQuery": "string (e.g. iPhone 16 Pro Max 256GB)"}
+`.trim();
 
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
@@ -175,58 +241,44 @@ export async function runShoppingAgentWithAudio(
           parts: [
             {
               inlineData: {
-                data: base64AudioData,
+                data: base64Image,
                 mimeType,
               },
             },
-            {
-              text: audioPrompt,
-            },
+            { text: prompt },
           ],
         },
       ],
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        tools: [comparePricesTool],
+        responseMimeType: 'application/json',
         temperature: 0.1,
       },
     });
 
-    const candidates = response.candidates;
-    const firstPart = candidates?.[0]?.content?.parts?.[0];
-    const functionCall = firstPart?.functionCall;
-
-    if (functionCall && functionCall.name === 'compare_prices') {
-      const args = functionCall.args as { query?: string };
-      const extractedQuery = (args?.query || 'کالای درخواستی').trim();
-
-      const priceResults = await compareAllPrices(extractedQuery);
-      const htmlText = formatComparisonFallback(extractedQuery, priceResults);
-
-      return {
-        htmlText: cleanHtmlOutput(htmlText),
-        products: priceResults,
-        searchQuery: extractedQuery,
-      };
+    const text = response.text?.trim();
+    if (text) {
+      const parsed = JSON.parse(text);
+      if (parsed.productQuery && parsed.productQuery.length >= 2) {
+        const products = await compareAllPrices(parsed.productQuery);
+        return {
+          htmlText: `📸 <b>کالای شناسایی شده از تصویر:</b> <code>${parsed.productQuery}</code>\n\n${formatComparisonFallback(parsed.productQuery, products)}`,
+          products,
+          searchQuery: parsed.productQuery,
+        };
+      }
     }
 
-    const directText =
-      response.text ||
-      '🎙️ پیام صوتی شما دریافت شد اما نام محصول مشخصی در آن تشخیص داده نشد. لطفاً نام کالا را به صورت متنی یا واضح‌تر ارسال کنید.';
     return {
-      htmlText: cleanHtmlOutput(directText),
+      htmlText: '⚠️ متأسفانه کالای مشخصی در تصویر شناسایی نشد. لطفاً نام کالا را تایپ کنید.',
     };
-  } catch (error: any) {
-    console.error('Audio agent execution error:', error?.message || error);
+  } catch (err) {
+    console.error('[Gemini Vision Agent] Error:', err);
     return {
-      htmlText: '⚠️ متأسفانه در پردازش پیام صوتی شما خطایی رخ داد. لطفاً نام محصول را به صورت متنی ارسال کنید.',
+      htmlText: '⚠️ در بررسی تصویر خطایی رخ داد. لطفاً نام محصول را به صورت متنی ارسال کنید.',
     };
   }
 }
 
-/**
- * Escapes unsafe HTML characters for Telegram HTML parse mode.
- */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -236,10 +288,7 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Generates structured Persian HTML comparison summary with strict lowest price highlight for Digikala & Torob.
- */
-/**
- * Generates structured Persian HTML comparison summary with strict lowest price highlight across Digikala, Torob, and Zoomit.
+ * Generates structured Persian HTML comparison summary.
  */
 export function formatComparisonFallback(query: string, results: ProductResult[]): string {
   const availableItems = results.filter((r) => r.isAvailable && r.price > 0);
@@ -250,7 +299,7 @@ export function formatComparisonFallback(query: string, results: ProductResult[]
   if (availableItems.length === 0) {
     return (
       `🔍 <b>استعلام قیمت برای:</b> <code>${escapeHtml(query)}</code>\n\n` +
-      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در دیجی‌کالا و ترب موجود نیست یا یافت نشد.\n\n` +
+      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در فروشگاه‌ها موجود نیست یا یافت نشد.\n\n` +
       `💡 <i>پیشنهاد: مدل مشخص‌تر یا نام دقیق کالا را ارسال کنید.</i>`
     );
   }
@@ -285,38 +334,30 @@ export function cleanHtmlOutput(rawText: string): string {
   if (!rawText) return '';
 
   let cleaned = rawText;
-
-  // 1. Convert block & list elements to standard text formatting
   cleaned = cleaned.replace(/<br\s*[\/]?>/gi, '\n');
   cleaned = cleaned.replace(/<\/?(ul|ol)>/gi, '');
   cleaned = cleaned.replace(/<li[^>]*>/gi, '• ');
   cleaned = cleaned.replace(/<\/li>/gi, '\n');
   cleaned = cleaned.replace(/<\/?(p|div)>/gi, '\n');
   cleaned = cleaned.replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, '<b>$1</b>\n');
-
-  // 2. Normalize markdown elements to Telegram HTML
   cleaned = cleaned.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
   cleaned = cleaned.replace(/\*(.*?)\*/g, '<i>$1</i>');
   cleaned = cleaned.replace(/`([^`]+)`/g, '<code>$1</code>');
   cleaned = cleaned.replace(/^#+\s*(.*?)$/gm, '<b>$1</b>');
 
-  // 3. Strip any unsupported HTML tags while preserving Telegram-compatible tags:
-  // Allowed: b, strong, i, em, u, ins, s, strike, del, a (with href), code, pre, blockquote
   cleaned = cleaned.replace(
     /<(?!\/?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|a(?:\s+href="[^"]*")?)\b)[^>]*>/gi,
     ''
   );
 
-  // 4. Normalize multiple blank lines
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-
   return cleaned.trim();
 }
 
 /**
  * Builds interactive Telegram InlineKeyboard buttons for product search results.
  */
-function buildProductInlineKeyboard(
+export function buildProductInlineKeyboard(
   products: ProductResult[],
   searchQuery: string
 ): InlineKeyboard {
@@ -329,7 +370,6 @@ function buildProductInlineKeyboard(
   const zoomitItem = products.find((p) => p.source === 'Zoomit');
 
   if (availableItems.length === 0) {
-    // Fallback search buttons if no products available
     keyboard
       .url('🔍 جستجو در ترب', toAffiliateUrl(`https://torob.com/search/?query=${encoded}`, 'Torob'))
       .url(
@@ -347,7 +387,7 @@ function buildProductInlineKeyboard(
   const cheapest = availableItems[0];
   const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
-  // Row 1: Primary action button for the cheapest store
+  // Row 1: Primary buy button
   keyboard.url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl).row();
 
   // Row 2: Direct links for Digikala and Torob
@@ -367,14 +407,19 @@ function buildProductInlineKeyboard(
 
   // Row 3: Zoomit specs & review button
   const zoomitUrl = zoomitItem?.url || `https://www.zoomit.ir/product/search/${encoded}/`;
-  keyboard.url('📱 بررسی و مشخصات در زومیت', toAffiliateUrl(zoomitUrl, 'Zoomit'));
+  keyboard.url('📱 بررسی و مشخصات در زومیت', toAffiliateUrl(zoomitUrl, 'Zoomit')).row();
+
+  // Row 4: Action Tools (Price Alert & Price Chart)
+  keyboard
+    .text('🔔 رصد کاهش قیمت', `alert:${searchQuery.slice(0, 30)}:${cheapest.price}`)
+    .text('📉 نمودار قیمت', `chart:${searchQuery.slice(0, 30)}:${cheapest.price}`);
 
   return keyboard;
 }
 
 /**
  * Sends response to user as photo message if product image is available,
- * or gracefully falls back to standard HTML text, and finally plain text on entity parsing errors.
+ * or gracefully falls back to standard HTML text.
  */
 async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promise<void> {
   const replyMarkup =
@@ -395,7 +440,7 @@ async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promis
       });
       return;
     } catch {
-      // Remote image might be webp or protected by CDN, gracefully fall back to HTML message
+      // Remote image fallback
     }
   }
 
@@ -407,7 +452,6 @@ async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promis
     });
   } catch (htmlError) {
     console.warn('[Telegram Bot] HTML parse error, falling back to pure plain text:', htmlError);
-    // 3. Bulletproof fallback: Strip all HTML tags and send as pure plain text
     try {
       await ctx.reply(plainText, {
         reply_markup: replyMarkup,
@@ -418,110 +462,259 @@ async function sendShoppingResponse(ctx: Context, result: AgentResponse): Promis
   }
 }
 
-/**
- * Suggestion Keyboard for quick onboarding searches.
- */
-const suggestionKeyboard = new Keyboard()
-  .text('📱 آیفون 13')
-  .text('💻 مک‌بوک ایر M3')
-  .row()
-  .text('🎧 ایرپاد پرو 2')
-  .text('🎮 پلی‌استیشن 5')
-  .row()
-  .text('ℹ️ راهنما')
-  .resized();
-
 /* ==========================================================================
-   Bot Commands and Handlers
+   Telegram Bot Command & Message Handlers
    ========================================================================== */
 
-/**
- * Registers the official Telegram bot menu commands.
- */
-export async function initBotCommands(): Promise<void> {
-  try {
-    await bot.api.setMyCommands([
-      { command: 'start', description: '🚀 شروع به کار و منوی اصلی' },
-      { command: 'help', description: '📖 راهنمای استعلام و مقایسه قیمت' },
-    ]);
-    console.log('✅ Bot menu commands registered successfully.');
-  } catch (err) {
-    console.warn('[Telegram Bot] Failed to set bot commands:', err);
-  }
-}
-
-// /start Command Handler
+// /start command
 bot.command('start', async (ctx: Context) => {
-  const welcomeMessage = `
-👋 <b>سلام! به ربات هوشمند مقایسه قیمت (مفت‌بر) خوش آمدید.</b>
+  const welcomeText = `
+👋 <b>سلام! به ربات مفت‌بر (شکارچی کمترین قیمت) خوش آمدید!</b> 🛍️
 
-من دستیار هوشمند شما برای پیدا کردن بهترین و ارزان‌ترین قیمت‌ها در <b>دیجی‌کالا</b> و <b>ترب</b> هستم.
+من قیمت هر کالایی را به صورت لحظه‌ای بین <b>دیجی‌کالا</b>، <b>ترب</b> و <b>زومیت</b> مقایسه می‌کنم تا همیشه <b>ارزان‌ترین فروشنده</b> را پیدا کنید.
 
-🔍 <b>روش‌های استفاده:</b>
-1️⃣ <b>ارسال متن:</b> نام کالا را تایپ کنید (مثلاً: <code>آیفون 13</code> یا <code>سامسونگ S24</code>).
-2️⃣ <b>ارسال وویس:</b> نام کالا را با ویس بگویید، هوش مصنوعی سریعاً آن را تشخیص داده و قیمت‌ها را استخراج می‌کند.
-3️⃣ <b>حالت اینلاین (Inline):</b> در هر چت یا گروهی کافیست بنویسید <code>@${ctx.me?.username || 'botname'} [نام کالا]</code>.
+💡 <b>امکانات ویژه:</b>
+• 🔍 <b>استعلام قیمت:</b> نام کالا را بفرستید (متن یا وویس).
+• 📸 <b>جستجوی تصویری:</b> عکس کالا یا جعبه آن را بفرستید.
+• 🔔 <b>هشدار کاهش قیمت:</b> با دکمه رصد، به محض ارزان شدن کالا باخبر شوید.
+• 📉 <b>نمودار تغییرات قیمت:</b> تحلیل روند قیمت در روزهای اخیر.
+• ⚖️ <b>مقایسه هوشمند:</b> بنویسید «مقایسه آیفون ۱۶ با S24 اولترا».
 
-👇 همچنین می‌توانید از گزینه‌های پیشنهادی زیر استفاده کنید:
+<i>همین الان نام یک محصول یا عکس آن را ارسال کنید!</i> 🚀
 `.trim();
 
-  await ctx.reply(welcomeMessage, {
+  const keyboard = new Keyboard()
+    .text('🔍 استعلام قیمت کالا')
+    .text('🔔 هشدارهای من')
+    .row()
+    .text('ℹ️ راهنما')
+    .resized();
+
+  await ctx.reply(welcomeText, {
     parse_mode: 'HTML',
-    reply_markup: suggestionKeyboard,
+    reply_markup: keyboard,
   });
 });
 
-// /help Command Handler
+// /help command
 bot.command('help', async (ctx: Context) => {
-  const helpMessage = `
-📖 <b>راهنمای ربات مقایسه قیمت مفت‌بر</b>
+  const helpText = `
+📖 <b>راهنمای استفاده از ربات:</b>
 
-1️⃣ <b>استعلام متنی:</b> نام هر محصول را تایپ و ارسال کنید.
-2️⃣ <b>استعلام صوتی (Voice):</b> یک پیام صوتی حاوی نام کالا بفرستید.
-3️⃣ <b>استعلام اینلاین:</b> با تایپ <code>@${ctx.me?.username || 'botname'} [اسم کالا]</code> در هر چتی قیمت‌ها را ببینید.
-4️⃣ <b>فروشگاه‌های تحت پوشش:</b>
-   • دیجی‌کالا (Digikala)
-   • ترب (Torob)
+۱. <b>جستجوی متنی:</b>
+کافی است نام هر کالای دیجیتال یا لوازم خانگی را بفرستید:
+• <code>مکبوک پرو m4</code>
+• <code>iphone 16 pro max 256gb</code>
+• <code>اسپیکر jbl charge 6</code>
 
-💡 <i>نکته: قیمت‌ها در حافظه کش ۱۵ دقیقه‌ای ذخیره می‌شوند تا پاسخ‌ها فوری و زیر ثانیه ارسال شوند.</i>
+۲. <b>جستجوی صوتی:</b>
+یک پیام صوتی (Voice) بفرستید و بگویید: «قیمت ایرپاد پرو ۲ چنده؟»
+
+۳. <b>جستجوی تصویری:</b>
+عکس محصول را ارسال کنید تا هوش مصنوعی آن را شناسایی و ارزان‌ترین قیمت را پیدا کند.
+
+۴. <b>مقایسه دو کالا:</b>
+بنویسید: <code>مقایسه MacBook Air M3 با M4</code>
+
+۵. <b>هشدارهای قیمت:</b>
+دستور /alerts را برای مشاهده کالاهای تحت رصد خود ارسال کنید.
 `.trim();
 
-  await ctx.reply(helpMessage, {
-    parse_mode: 'HTML',
+  await ctx.reply(helpText, { parse_mode: 'HTML' });
+});
+
+// /alerts command (View active price alerts)
+bot.command('alerts', async (ctx: Context) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const alerts = alertService.getUserAlerts(userId);
+
+  if (alerts.length === 0) {
+    return ctx.reply(
+      '🔔 <b>شما در حال حاضر هیچ هشدار فعالی ندارید.</b>\n\nبرای فعال‌سازی، بعد از جستجوی هر کالا روی دکمه <b>«🔔 رصد کاهش قیمت»</b> کلیک کنید.',
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  let text = `📋 <b>لیست کالاهای تحت رصد شما (${alerts.length} مورد):</b>\n\n`;
+  const keyboard = new InlineKeyboard();
+
+  alerts.forEach((alt, idx) => {
+    text += `${idx + 1}. <b>${escapeHtml(alt.query)}</b>\n`;
+    text += `💰 قیمت ثبت شده: ${formatTomanPrice(alt.initialPrice)}\n`;
+    text += `📉 آخرین قیمت: ${formatTomanPrice(alt.lastCheckedPrice)}\n\n`;
+
+    keyboard.text(`🔕 لغو: ${alt.query.slice(0, 20)}`, `del_alert:${alt.id}`).row();
   });
+
+  await ctx.reply(text.trim(), {
+    parse_mode: 'HTML',
+    reply_markup: keyboard,
+  });
+});
+
+// Callback query for Price Alert Registration
+bot.callbackQuery(/^alert:(.+):(\d+)$/, async (ctx) => {
+  const match = ctx.match;
+  if (!match) return;
+
+  const query = match[1];
+  const price = parseInt(match[2], 10);
+  const userId = ctx.from.id;
+  const chatId = ctx.chat?.id || userId;
+
+  const { alert, isNew } = alertService.addAlert(
+    userId,
+    chatId,
+    query,
+    query,
+    price,
+    'Market',
+    ''
+  );
+
+  await ctx.answerCallbackQuery({
+    text: isNew
+      ? `✅ هشدار فعال شد! به محض ارزان‌تر شدن به شما پیام می‌دهیم.`
+      : `ℹ️ این کالا قبلاً در لیست رصد شما قرار دارد.`,
+    show_alert: true,
+  });
+});
+
+// Callback query for Deleting Alert
+bot.callbackQuery(/^del_alert:(.+)$/, async (ctx) => {
+  const match = ctx.match;
+  if (!match) return;
+
+  const alertId = match[1];
+  const userId = ctx.from.id;
+
+  const success = alertService.removeAlert(userId, alertId);
+
+  await ctx.answerCallbackQuery({
+    text: success ? '🔕 هشدار با موفقیت غیرفعال شد.' : '⚠️ هشدار یافت نشد.',
+  });
+
+  if (success) {
+    await ctx.editMessageText('🔕 <b>هشدار کاهش قیمت این کالا با موفقیت غیرفعال شد.</b>', {
+      parse_mode: 'HTML',
+    });
+  }
+});
+
+// Callback query for Price History Chart
+bot.callbackQuery(/^chart:(.+):(\d+)$/, async (ctx) => {
+  const match = ctx.match;
+  if (!match) return;
+
+  const query = match[1];
+  const price = parseInt(match[2], 10);
+
+  await ctx.answerCallbackQuery({ text: '📊 در حال تولید نمودار قیمت...' });
+
+  const analysis = generatePriceChartUrl(query, price);
+
+  const caption = `
+📉 <b>تحلیل و نمودار قیمت: ${escapeHtml(query)}</b>
+
+💰 <b>قیمت فعلی:</b> <b>${formatTomanPrice(analysis.currentPrice)}</b>
+📉 <b>کمترین قیمت دوره:</b> ${formatTomanPrice(analysis.minPrice)}
+📈 <b>بیشترین قیمت دوره:</b> ${formatTomanPrice(analysis.maxPrice)}
+
+💡 <b>توصیه هوش مصنوعی:</b>
+${analysis.advicePersian}
+`.trim();
+
+  try {
+    await ctx.replyWithPhoto(analysis.chartUrl, {
+      caption,
+      parse_mode: 'HTML',
+    });
+  } catch (err) {
+    await ctx.reply(caption, { parse_mode: 'HTML' });
+  }
 });
 
 // Text Message Handler
 bot.on('message:text', async (ctx: Context) => {
-  const text = ctx.message?.text?.trim();
-  if (!text) return;
+  const text = ctx.message?.text?.trim() || '';
 
-  // Handle help button from suggestion keyboard
+  if (text.startsWith('/')) return;
+
+  if (text === '🔍 استعلام قیمت کالا') {
+    return ctx.reply('🔍 نام کالای مورد نظرتان را تایپ کنید (مثلاً: <code>iPhone 16 Pro Max</code>):', {
+      parse_mode: 'HTML',
+    });
+  }
+
+  if (text === '🔔 هشدارهای من') {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    const alerts = alertService.getUserAlerts(userId);
+    if (alerts.length === 0) {
+      return ctx.reply(
+        '🔔 <b>شما هیچ هشدار فعالی ندارید.</b>\nبعد از جستجوی کالا روی «🔔 رصد کاهش قیمت» کلیک کنید.',
+        { parse_mode: 'HTML' }
+      );
+    }
+    let msg = `📋 <b>هشدارهای فعال شما (${alerts.length} مورد):</b>\n\n`;
+    const keyboard = new InlineKeyboard();
+    alerts.forEach((alt, idx) => {
+      msg += `${idx + 1}. <b>${escapeHtml(alt.query)}</b> (${formatTomanPrice(alt.initialPrice)})\n`;
+      keyboard.text(`🔕 لغو: ${alt.query.slice(0, 18)}`, `del_alert:${alt.id}`).row();
+    });
+    return ctx.reply(msg.trim(), { parse_mode: 'HTML', reply_markup: keyboard });
+  }
+
   if (text === 'ℹ️ راهنما') {
     return ctx.reply(
-      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا <code>مک‌بوک پرو M4</code> یا یک وویس بفرستید).',
+      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا <code>مک‌بوک پرو M4</code> یا یک عکس/وویس بفرستید).',
       { parse_mode: 'HTML' }
     );
   }
 
-  // Send typing chat action
+  // Side-by-side comparison check
+  if (isComparisonQuery(text)) {
+    const items = parseComparisonItems(text);
+    if (items) {
+      await ctx.replyWithChatAction('typing');
+      const compLoading = await ctx.reply(
+        `⚖️ <b>در حال مقایسه هوشمند "${items[0]}" با "${items[1]}"...</b> ⏳`,
+        { parse_mode: 'HTML' }
+      );
+      try {
+        const compResult = await compareTwoProducts(items[0], items[1]);
+        if (ctx.chat?.id) {
+          await ctx.api.deleteMessage(ctx.chat.id, compLoading.message_id).catch(() => {});
+        }
+        return ctx.reply(compResult.htmlSummary, {
+          parse_mode: 'HTML',
+          reply_markup: compResult.keyboard,
+        });
+      } catch (compErr) {
+        if (ctx.chat?.id) {
+          await ctx.api.deleteMessage(ctx.chat.id, compLoading.message_id).catch(() => {});
+        }
+      }
+    }
+  }
+
   await ctx.replyWithChatAction('typing');
 
-  // Immediately send temporary loading message
   let loadingMsg: any = null;
   try {
     loadingMsg = await ctx.reply(
-      '🔍 <b>در حال جستجو و مقایسه قیمت‌ها از دیجی‌کالا و ترب...</b> ⏳',
+      '🔍 <b>در حال جستجو و مقایسه قیمت‌ها از دیجی‌کالا، ترب و زومیت...</b> ⏳',
       { parse_mode: 'HTML' }
     );
   } catch {
-    // Proceed even if sending loading message failed
+    // ignore
   }
 
   try {
     const result = await runShoppingAgent(text);
 
-    // Delete loading message before sending final response
     if (loadingMsg && ctx.chat?.id) {
       await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
     }
@@ -540,6 +733,62 @@ bot.on('message:text', async (ctx: Context) => {
   }
 });
 
+// Photo Message Handler (Visual Search / Image Recognition)
+bot.on('message:photo', async (ctx: Context) => {
+  const photos = ctx.message?.photo;
+  if (!photos || photos.length === 0) return;
+
+  await ctx.replyWithChatAction('typing');
+
+  let loadingMsg: any = null;
+  try {
+    loadingMsg = await ctx.reply('📸 <b>در حال پردازش تصویر و تشخیص هوشمند مدل کالا...</b> ⏳', {
+      parse_mode: 'HTML',
+    });
+  } catch {
+    // ignore
+  }
+
+  try {
+    const bestPhoto = photos[photos.length - 1]; // Highest resolution
+    const file = await ctx.api.getFile(bestPhoto.file_id);
+
+    if (!file.file_path) {
+      if (loadingMsg && ctx.chat?.id) {
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+      }
+      return ctx.reply('⚠️ دریافت تصویر با مشکل مواجه شد. لطفاً نام محصول را تایپ کنید.', {
+        parse_mode: 'HTML',
+      });
+    }
+
+    const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+    const response = await axios.get<ArrayBuffer>(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+    });
+
+    const base64Image = Buffer.from(response.data).toString('base64');
+    const mimeType = 'image/jpeg';
+
+    const result = await runShoppingAgentWithPhoto(base64Image, mimeType);
+
+    if (loadingMsg && ctx.chat?.id) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+
+    await sendShoppingResponse(ctx, result);
+  } catch (error: any) {
+    console.error('Error handling photo message:', error?.message || error);
+    if (loadingMsg && ctx.chat?.id) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+    await ctx.reply('⚠️ در پردازش تصویر خطایی رخ داد. لطفاً نام کالا را به صورت متنی ارسال کنید.', {
+      parse_mode: 'HTML',
+    });
+  }
+});
+
 // Voice Message Handler (Multimodal Gemini Speech Recognition)
 bot.on('message:voice', async (ctx: Context) => {
   const voice = ctx.message?.voice;
@@ -547,7 +796,6 @@ bot.on('message:voice', async (ctx: Context) => {
 
   await ctx.replyWithChatAction('typing');
 
-  // Immediately send temporary loading message
   let loadingMsg: any = null;
   try {
     loadingMsg = await ctx.reply(
@@ -555,7 +803,7 @@ bot.on('message:voice', async (ctx: Context) => {
       { parse_mode: 'HTML' }
     );
   } catch {
-    // Proceed even if sending loading message failed
+    // ignore
   }
 
   try {
@@ -609,11 +857,11 @@ bot.on('inline_query', async (ctx: Context) => {
       'inline_help',
       '🔍 جستجوی هوشمند قیمت کالا',
       {
-        description: 'نام محصول را تایپ کنید (مثلاً: iPhone 15 یا ایرپاد پرو)',
+        description: 'نام محصول را تایپ کنید (مثلاً: iPhone 16 یا مکبوک پرو M4)',
         thumbnail_url: 'https://cdn-icons-png.flaticon.com/512/3144/3144456.png',
       }
     ).text(
-      '👋 <b>برای استعلام قیمت در تلگرام:</b>\nنام محصول مورد نظرتان را پس از آیدی ربات بنویسید (مثلاً: <code>@botname MacBook Air M3</code>).',
+      '👋 <b>برای استعلام قیمت در تلگرام:</b>\nنام محصول مورد نظرتان را پس از آیدی ربات بنویسید (مثلاً: <code>@botname MacBook Pro M4</code>).',
       { parse_mode: 'HTML' }
     );
 
@@ -629,7 +877,7 @@ bot.on('inline_query', async (ctx: Context) => {
         'not_found',
         `❌ محصول "${query}" یافت نشد`,
         {
-          description: 'هیچ کالای فعالی در دیجی‌کالا و ترب پیدا نشد.',
+          description: 'هیچ کالای فعالی در فروشگاه‌ها پیدا نشد.',
           reply_markup: buildProductInlineKeyboard(products, query),
         }
       ).text(
@@ -643,7 +891,6 @@ bot.on('inline_query', async (ctx: Context) => {
     const cheapest = availableItems[0];
     const inlineResults = [];
 
-    // 1. Comparison Summary Article
     const summaryHtml = formatComparisonFallback(query, products);
 
     const summaryArticle = InlineQueryResultBuilder.article(
@@ -658,7 +905,6 @@ bot.on('inline_query', async (ctx: Context) => {
 
     inlineResults.push(summaryArticle);
 
-    // 2. Individual Store Offers
     products.forEach((product, idx) => {
       const affiliateUrl = toAffiliateUrl(product.url, product.source);
       const isAvail = product.isAvailable && product.price > 0;
@@ -693,9 +939,6 @@ bot.on('inline_query', async (ctx: Context) => {
   }
 });
 
-/* ==========================================================================
-   Global Error Handler
-   ========================================================================== */
 bot.catch((err) => {
   const ctx = err.ctx;
   console.error(`[Telegram Bot] Error while handling update ${ctx.update.update_id}:`);
@@ -709,3 +952,41 @@ bot.catch((err) => {
     console.error('[Telegram Bot] Unknown runtime error:', e);
   }
 });
+
+/**
+ * Register Telegram bot commands in the menu.
+ */
+export async function registerBotCommands(): Promise<void> {
+  try {
+    await bot.api.setMyCommands([
+      { command: 'start', description: '🚀 شروع به کار و منوی اصلی' },
+      { command: 'help', description: '📖 راهنمای استعلام و مقایسه قیمت' },
+      { command: 'alerts', description: '🔔 هشدارهای فعال کاهش قیمت من' },
+    ]);
+    console.log('[Telegram Bot] ✅ Bot menu commands registered successfully.');
+  } catch (err) {
+    console.warn('[Telegram Bot] ⚠️ Could not register bot commands:', err);
+  }
+}
+
+/**
+ * Start the bot polling service and periodic background tasks.
+ */
+export async function startBot(): Promise<void> {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error('[Telegram Bot] Cannot start bot without TELEGRAM_BOT_TOKEN.');
+    return;
+  }
+
+  await registerBotCommands();
+
+  // Start background price alert tracker (every 60 minutes)
+  alertService.startBackgroundTracker(bot, 60);
+
+  console.log('[Telegram Bot] 🚀 Starting Telegram Bot polling...');
+  bot.start({
+    onStart: (botInfo) => {
+      console.log(`[Telegram Bot] 🚀 Bot @${botInfo.username} is now online and listening for messages!`);
+    },
+  });
+}
