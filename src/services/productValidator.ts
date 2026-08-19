@@ -1,29 +1,53 @@
-import { GoogleGenAI } from '@google/genai';
-import dotenv from 'dotenv';
 import process from 'node:process';
+import { GoogleGenAI } from '@google/genai';
 
-dotenv.config();
+/**
+ * Candidate item structure for product validation.
+ */
+export interface CandidateProduct {
+  title: string;
+  price: number; // in Tomans
+  status?: string | null;
+  raw?: any;
+}
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
 let aiInstance: GoogleGenAI | null = null;
 if (GEMINI_API_KEY) {
   aiInstance = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 }
 
-export interface CandidateProduct {
-  title: string;
-  price: number;
-  status?: string;
-  url?: string;
-  raw?: any;
-}
+/**
+ * Keywords indicating fake, replica, or non-genuine items.
+ */
+export const FAKE_KEYWORDS = [
+  'طرح',
+  'کپی',
+  'فیک',
+  'غیراصل',
+  'غیر اصل',
+  'های کپی',
+  'های‌کپی',
+  'high copy',
+  'clone',
+  'replica',
+  'fake',
+  'copy',
+  'فول کپی',
+  'ماکت',
+];
 
-const ACCESSORY_KEYWORDS = [
-  'گلس',
+/**
+ * Keywords indicating accessories that must be filtered out when a main device is requested.
+ */
+export const ACCESSORY_KEYWORDS = [
   'محافظ صفحه',
+  'محافظ نمایش',
   'محافظ لنز',
+  'محافظ دوربین',
+  'گلس',
   'کاور',
   'قاب',
   'کیف',
@@ -32,14 +56,19 @@ const ACCESSORY_KEYWORDS = [
   'برچسب',
   'شارژر',
   'کابل',
-  'پد',
-  'پایه',
+  'پد ماوس',
+  'پد موس',
+  'پایه نگهدارنده',
   'هولدر',
+  'استند',
   'تبدیل',
+  'مونوپاد',
   'سلفی',
   'اسکین',
   'آستین',
   'screen protector',
+  'lens protector',
+  'glass',
   'case',
   'cover',
   'strap',
@@ -48,59 +77,87 @@ const ACCESSORY_KEYWORDS = [
   'cable',
   'film',
   'skin',
+  'keyboard cover',
+  'dust plug',
+  'محافظ کیبورد',
 ];
 
-const USED_AND_INSTALLMENT_KEYWORDS = [
+/**
+ * Keywords indicating used, refurbished, stock, or installment down-payments.
+ */
+export const USED_KEYWORDS = [
   'کارکرده',
   'استوک',
   'دست دوم',
   'refurbished',
   'open box',
+  'open-box',
   'جعبه باز',
-  'قسطی',
+  'جعبه آسیب دیده',
+  'نمایشگاهی',
+  'ویترینی',
   'پیش پرداخت',
   'اقساط',
+  'قسطی',
+  'down payment',
   'stock',
   'used',
 ];
 
 /**
- * Checks if a title represents an accessory when the user didn't ask for one.
+ * Detects if a product title is an accessory when the user searched for a main device.
  */
 export function isAccessoryProduct(title: string, query: string): boolean {
   const t = title.toLowerCase();
   const q = query.toLowerCase();
-  const userWantsAccessory = ACCESSORY_KEYWORDS.some((k) => q.includes(k));
-  if (userWantsAccessory) return false;
-  return ACCESSORY_KEYWORDS.some((k) => {
-    const regex = new RegExp(`(^|\\s|\\/|-)${k}(\\s|\\/|-|$)`, 'i');
-    return regex.test(t) || t.includes(k);
+
+  for (const acc of ACCESSORY_KEYWORDS) {
+    if (q.includes(acc)) {
+      return false; // User explicitly asked for the accessory
+    }
+  }
+
+  return ACCESSORY_KEYWORDS.some((acc) => {
+    const regex = new RegExp(`(^|\\s|\\/|-)${acc}(\\s|\\/|-|$)`, 'i');
+    return regex.test(t) || t.includes(acc);
   });
 }
 
 /**
- * Checks if a title or status denotes used, second-hand, refurbished, or installment down payments.
+ * Detects if a product is used, refurbished, or fake.
  */
-export function isUsedOrInstallmentProduct(
+export function isUsedOrFakeProduct(
   title: string,
-  status: string | undefined,
+  status: string | null | undefined,
   query: string
 ): boolean {
-  const combined = `${title} ${status || ''}`.toLowerCase();
+  const t = title.toLowerCase();
   const q = query.toLowerCase();
-  const userWantsUsed = USED_AND_INSTALLMENT_KEYWORDS.some((k) => q.includes(k));
-  if (userWantsUsed) return false;
-  return USED_AND_INSTALLMENT_KEYWORDS.some((k) => combined.includes(k));
+  const fullText = `${t} ${(status || '').toLowerCase()}`;
+
+  // Fake / Replica check
+  if (FAKE_KEYWORDS.some((f) => t.includes(f) || fullText.includes(f))) {
+    return true;
+  }
+
+  // Used / Refurbished check
+  for (const u of USED_KEYWORDS) {
+    if (q.includes(u)) {
+      return false; // User explicitly asked for used/stock
+    }
+  }
+
+  return USED_KEYWORDS.some((u) => fullText.includes(u));
 }
 
 /**
- * Ensures strict sub-model matching (e.g. Pro vs Air, Ultra, Max, Plus, Mini).
+ * Checks whether sub-models match (e.g. Pro vs Air, Ultra vs base, Slim vs standard).
  */
 export function matchesSubModel(title: string, query: string): boolean {
-  const q = query.toLowerCase();
   const t = title.toLowerCase();
+  const q = query.toLowerCase();
 
-  // Pro vs Air
+  // MacBook / iPad: Pro vs Air
   const qHasPro = /(?:^|\s)(pro|پرو)(?:\s|$)/i.test(q);
   const qHasAir = /(?:^|\s)(air|ایر)(?:\s|$)/i.test(q);
   const tHasPro = /(?:^|\s)(pro|پرو)(?:\s|$)/i.test(t);
@@ -109,43 +166,38 @@ export function matchesSubModel(title: string, query: string): boolean {
   if (qHasPro && !qHasAir && tHasAir && !tHasPro) return false;
   if (qHasAir && !qHasPro && tHasPro && !tHasAir) return false;
 
-  // Ultra
-  const qHasUltra = /(?:^|\s)(ultra|اولترا)(?:\s|$)/i.test(q);
-  const tHasUltra = /(?:^|\s)(ultra|اولترا)(?:\s|$)/i.test(t);
+  // Ultra vs standard (Galaxy S24 Ultra / Apple Watch Ultra)
+  const qHasUltra = /(?:^|\s)(ultra|اولترا|الترا)(?:\s|$)/i.test(q);
+  const tHasUltra = /(?:^|\s)(ultra|اولترا|الترا)(?:\s|$)/i.test(t);
   if (qHasUltra && !tHasUltra) return false;
-  if (!qHasUltra && tHasUltra && (q.includes('s2') || q.includes('apple watch'))) return false;
+  if (!qHasUltra && tHasUltra && (q.includes('s23') || q.includes('s24') || q.includes('s25'))) return false;
 
-  // Max
-  const qHasMax = /(?:^|\s)(max|مکس)(?:\s|$)/i.test(q);
-  const tHasMax = /(?:^|\s)(max|مکس)(?:\s|$)/i.test(t);
-  if (qHasMax && !tHasMax) return false;
-
-  // Plus
+  // Plus vs regular
   const qHasPlus = /(?:^|\s)(plus|پلاس)(?:\s|$)/i.test(q);
   const tHasPlus = /(?:^|\s)(plus|پلاس)(?:\s|$)/i.test(t);
   if (qHasPlus && !tHasPlus) return false;
-
-  // Mini
-  const qHasMini = /(?:^|\s)(mini|مینی)(?:\s|$)/i.test(q);
-  const tHasMini = /(?:^|\s)(mini|مینی)(?:\s|$)/i.test(t);
-  if (qHasMini && !tHasMini) return false;
 
   return true;
 }
 
 /**
- * Ensures strict chipset, processor generation, and model number matching.
+ * Checks whether chipset and numerical generation match.
  */
 export function matchesChipsetAndGeneration(title: string, query: string): boolean {
-  const q = query.toLowerCase();
   const t = title.toLowerCase();
+  const q = query.toLowerCase();
 
-  // 1. Apple Silicon Chips (M1, M2, M3, M4, M5, M4 Pro, M4 Max)
-  const chipMatch = q.match(/(?:^|\s)(m[1-9]|m[1-9]\s*pro|m[1-9]\s*max)(?:\s|$)/i);
+  // 1. Apple Silicon M-Series (M1, M2, M3, M4, M5)
+  const chipMatch = q.match(/(?:^|\s)(m[1-9])(?:\s|$)/i);
   if (chipMatch) {
-    const chip = chipMatch[1].replace(/\s+/g, '').toLowerCase();
-    const tWithoutSpaces = t.replace(/\s+/g, '');
-    if (!tWithoutSpaces.includes(chip)) return false;
+    const requestedChip = chipMatch[1].toLowerCase();
+    const allMChips = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'];
+    const otherMChips = allMChips.filter((c) => c !== requestedChip);
+
+    // Reject other M-chips
+    if (otherMChips.some((c) => new RegExp(`(?:^|\\s|-)${c}(?:\\s|-|$)`, 'i').test(t))) {
+      return false;
+    }
 
     // Reject older Intel chips when M-series is requested
     const oldIntel = [
@@ -166,9 +218,13 @@ export function matchesChipsetAndGeneration(title: string, query: string): boole
     if (oldIntel.some((old) => t.includes(old)) && !q.includes('intel')) {
       return false;
     }
+
+    if (!t.includes(requestedChip)) {
+      return false;
+    }
   }
 
-  // 2. Numeric Generation (e.g. iPhone 13 vs 14 vs 15 vs 16 / S23 vs S24 vs S25)
+  // 2. Numerical Generation (iPhone 11/12/13/14/15/16, S23/S24/S25, AirPods 2/3/4)
   const genMatch = q.match(/(?:^|\s)(\d{2}|s\d{2})(?:\s|$)/i);
   if (genMatch) {
     const gen = genMatch[1].toLowerCase();
@@ -182,7 +238,7 @@ export function matchesChipsetAndGeneration(title: string, query: string): boole
 }
 
 /**
- * Checks price realism to eliminate accessory matches or down payment installments.
+ * Checks price realism to eliminate accessory matches, fake clones, or down payment installments.
  */
 export function isPriceRealistic(title: string, price: number, query: string): boolean {
   if (price <= 0) return false;
@@ -190,13 +246,15 @@ export function isPriceRealistic(title: string, price: number, query: string): b
   const q = query.toLowerCase();
   const t = title.toLowerCase();
 
-  // Laptops (MacBook, ThinkPad, ZenBook, Legion, ROG, etc.)
-  const isLaptop =
-    ['macbook', 'مکبوک', 'مک بوک', 'لپ تاپ', 'لپتاپ', 'laptop'].some((k) => q.includes(k)) ||
-    ['macbook', 'مکبوک', 'مک بوک', 'لپ تاپ', 'لپتاپ'].some((k) => t.includes(k));
+  // 1. AirPods
+  if (q.includes('airpods') || q.includes('ایرپاد') || t.includes('airpods') || t.includes('ایرپاد')) {
+    if (price < 10000000) return false; // Genuine AirPods start above 10M Toman
+  }
 
-  if (isLaptop) {
-    // If it's a modern M-series MacBook, filter out installment down payments
+  // 2. Laptops (MacBook)
+  const isMacBook =
+    ['macbook', 'مکبوک', 'مک بوک'].some((k) => q.includes(k) || t.includes(k));
+  if (isMacBook) {
     if (q.includes('m4') || t.includes('m4')) {
       if (price < 150000000) return false;
     } else if (q.includes('m3') || t.includes('m3')) {
@@ -205,17 +263,29 @@ export function isPriceRealistic(title: string, price: number, query: string): b
       if (price < 65000000) return false;
     } else if (q.includes('m1') || t.includes('m1')) {
       if (price < 45000000) return false;
-    } else if (price < 15000000) {
+    } else if (price < 30000000) {
       return false;
     }
   }
 
-  // Flagship Phones (iPhone 13/14/15/16, Galaxy S23/S24/S25)
+  // 3. Flagship Phones (iPhone, Galaxy S-series)
   const isFlagshipPhone =
-    ['iphone', 'آیفون', 'ایفون', 's23', 's24', 's25'].some((k) => q.includes(k)) &&
-    !ACCESSORY_KEYWORDS.some((k) => q.includes(k));
+    ['iphone', 'آیفون', 'ایفون', 's23', 's24', 's25'].some((k) => q.includes(k) || t.includes(k));
+  if (isFlagshipPhone && price < 25000000) {
+    return false;
+  }
 
-  if (isFlagshipPhone && price < 15000000) {
+  // 4. Gaming Consoles (PS5, Xbox Series X)
+  const isConsole =
+    ['ps5', 'پلی استیشن', 'playstation', 'xbox series'].some((k) => q.includes(k) || t.includes(k));
+  if (isConsole && price < 20000000) {
+    return false;
+  }
+
+  // 5. Apple Watch
+  const isAppleWatch =
+    ['apple watch', 'اپل واچ', 'اپلواچ'].some((k) => q.includes(k) || t.includes(k));
+  if (isAppleWatch && price < 10000000) {
     return false;
   }
 
@@ -223,7 +293,50 @@ export function isPriceRealistic(title: string, price: number, query: string): b
 }
 
 /**
- * Algorithmic deterministic filter and ranker to select the single best genuine matching product.
+ * Computes a high-precision relevance score (0 to 100) for a candidate product.
+ */
+export function scoreCandidateProduct(
+  title: string,
+  price: number,
+  status: string | null | undefined,
+  query: string
+): number {
+  if (price <= 0) return 0;
+  if (isAccessoryProduct(title, query)) return 0;
+  if (isUsedOrFakeProduct(title, status, query)) return 0;
+  if (!matchesSubModel(title, query)) return 0;
+  if (!matchesChipsetAndGeneration(title, query)) return 0;
+  if (!isPriceRealistic(title, price, query)) return 0;
+
+  let score = 60;
+  const t = title.toLowerCase();
+  const q = query.toLowerCase();
+
+  // Exact Chip bonus
+  const chipMatch = q.match(/(?:^|\s)(m[1-9])(?:\s|$)/i);
+  if (chipMatch) {
+    const chip = chipMatch[1].toLowerCase();
+    if (t.includes(`${chip} pro`) && !q.includes('pro')) {
+      score -= 10; // Higher tier variant
+    } else {
+      score += 20;
+    }
+  }
+
+  // Exact base storage match (e.g. 128 vs 256 vs 512)
+  const storageMatch = q.match(/(?:^|\s)(128|256|512|1tb|2tb)(?:\s|$)/i);
+  if (storageMatch) {
+    const storage = storageMatch[1].toLowerCase();
+    if (t.includes(storage)) {
+      score += 20;
+    }
+  }
+
+  return Math.min(100, Math.max(0, score));
+}
+
+/**
+ * Deterministic ranker to select the single best genuine matching product.
  */
 export function deterministicFilterAndRank(
   candidates: CandidateProduct[],
@@ -231,27 +344,25 @@ export function deterministicFilterAndRank(
 ): CandidateProduct | null {
   if (!candidates || candidates.length === 0) return null;
 
-  const validCandidates = candidates.filter((c) => {
-    if (!c.title || c.price <= 0) return false;
-    if (isAccessoryProduct(c.title, query)) return false;
-    if (isUsedOrInstallmentProduct(c.title, c.status, query)) return false;
-    if (!matchesSubModel(c.title, query)) return false;
-    if (!matchesChipsetAndGeneration(c.title, query)) return false;
-    if (!isPriceRealistic(c.title, c.price, query)) return false;
-    return true;
-  });
+  const scored = candidates
+    .map((c) => ({
+      candidate: c,
+      score: scoreCandidateProduct(c.title, c.price, c.status, query),
+    }))
+    .filter((item) => item.score >= 50 && item.candidate.price > 0);
 
-  if (validCandidates.length === 0) {
+  if (scored.length === 0) {
     return null;
   }
 
-  // Sort by price ascending to find the best deal
-  validCandidates.sort((a, b) => a.price - b.price);
-  return validCandidates[0];
+  // Sort primarily by highest match score, secondarily by lowest price
+  scored.sort((a, b) => b.score - a.score || a.candidate.price - b.candidate.price);
+
+  return scored[0].candidate;
 }
 
 /**
- * AI-powered validator using Gemini to semantically verify candidates and pick the exact match.
+ * AI-powered validator using Gemini with deterministic safety.
  */
 export async function validateProductCandidatesWithAI(
   query: string,
@@ -259,71 +370,65 @@ export async function validateProductCandidatesWithAI(
 ): Promise<CandidateProduct | null> {
   if (!candidates || candidates.length === 0) return null;
 
-  // First run deterministic filter to eliminate obvious junk
+  // Run deterministic filter first
   const deterministicBest = deterministicFilterAndRank(candidates, query);
 
-  // If Gemini API is not configured, return deterministic result immediately
-  if (!aiInstance) {
+  // If deterministic score is high-confidence, return it immediately for instant 0ms latency
+  if (deterministicBest) {
     return deterministicBest;
   }
 
-  // Limit candidates to top 6 to conserve tokens and reduce latency
-  const candidateSlice = candidates.slice(0, 6);
+  // If Gemini API is available, try semantic evaluation
+  if (aiInstance) {
+    try {
+      const candidateSlice = candidates.slice(0, 6);
+      const prompt = `
+You are an Iranian e-commerce product verification AI.
+User is searching for: "${query}"
 
-  const prompt = `
-You are an expert Iranian e-commerce product verification AI.
-The user is searching for: "${query}"
-
-Here is a list of candidate products from an Iranian online store:
+Candidates:
 ${candidateSlice
   .map(
     (c, i) =>
-      `[${i + 1}] Title: "${c.title}" | Price: ${c.price.toLocaleString('en-US')} Toman | Status: ${c.status || 'New/Available'}`
+      `[${i + 1}] Title: "${c.title}" | Price: ${c.price.toLocaleString('en-US')} Toman | Status: ${c.status || 'New'}`
   )
   .join('\n')}
 
-Task:
-1. Identify the EXACT matching product index (1-based) that represents the NEW, GENUINE product matching the user's requested brand, model family, generation, and chipset (e.g. M4, iPhone 15 Pro, Tefal Iron, etc.).
-2. Strictly FILTER OUT:
-   - Accessories (screen protectors / محافظ صفحه, cases / قاب, chargers / شارژر, cables, sleeves)
-   - Used / refurbished / stock products (کارکرده, استوک, دست دوم)
-   - Sub-model mismatch (e.g. user asked for MacBook Pro but candidate is MacBook Air; user asked for Pro but candidate is base model)
-   - Generation / Chipset mismatch (e.g. user asked for M4 but candidate is Intel Core i5 or 2019/2020 or M1/M2/M3)
-   - Fake or partial prices (installment down payments / پیش پرداخت under actual market value)
-3. Return ONLY a JSON object: {"selectedIndex": number | null, "reason": "brief explanation"}
+Task: Select the EXACT genuine new matching product index (1-based), or return null if all are accessories/used/fake.
+Return ONLY JSON: {"selectedIndex": number | null}
 `.trim();
 
-  try {
-    const response = await aiInstance.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.1,
-      },
-    });
+      const response = await aiInstance.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        },
+      });
 
-    const text = response.text?.trim();
-    if (text) {
-      const parsed = JSON.parse(text);
-      if (
-        typeof parsed.selectedIndex === 'number' &&
-        parsed.selectedIndex >= 1 &&
-        parsed.selectedIndex <= candidateSlice.length
-      ) {
-        const aiChosen = candidateSlice[parsed.selectedIndex - 1];
-        process.stderr.write(
-          `[productValidator] AI verified exact match: "${aiChosen.title.slice(0, 45)}..." at ${aiChosen.price} Toman (${parsed.reason || 'verified'})\n`
-        );
-        return aiChosen;
+      const text = response.text?.trim();
+      if (text) {
+        const parsed = JSON.parse(text);
+        if (
+          typeof parsed.selectedIndex === 'number' &&
+          parsed.selectedIndex >= 1 &&
+          parsed.selectedIndex <= candidateSlice.length
+        ) {
+          const aiChosen = candidateSlice[parsed.selectedIndex - 1];
+          if (
+            !isAccessoryProduct(aiChosen.title, query) &&
+            !isUsedOrFakeProduct(aiChosen.title, aiChosen.status, query) &&
+            isPriceRealistic(aiChosen.title, aiChosen.price, query)
+          ) {
+            return aiChosen;
+          }
+        }
       }
+    } catch {
+      // Return deterministicBest on error
     }
-  } catch (error: any) {
-    process.stderr.write(
-      `[productValidator] AI validation skipped due to error/quota (${error?.message || error}), falling back to deterministic ranker.\n`
-    );
   }
 
-  // Gracefully fallback to deterministic ranker
   return deterministicBest;
 }
