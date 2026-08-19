@@ -358,14 +358,36 @@ const TorobResponseSchema = z.object({
 async function fetchTorobSingleQuery(query: string): Promise<ProductResult | null> {
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://torob.com/search/?query=${encodedQuery}`;
-  const apiUrl = `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`;
 
-  const response = await axios.get(apiUrl, {
-    headers: torobHeaders,
-    timeout: DEFAULT_TIMEOUT_MS,
-  });
+  const endpoints = [
+    `http://api.torob.com/v4/base-product/search/?q=${encodedQuery}&page=0&size=10`,
+    `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&page=0&size=10`,
+    `http://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`,
+    `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`,
+  ];
 
-  const parsedData = TorobResponseSchema.safeParse(response.data);
+  let responseData: any = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await axios.get(endpoint, {
+        headers: torobHeaders,
+        timeout: DEFAULT_TIMEOUT_MS,
+      });
+      if (response.data) {
+        responseData = response.data;
+        break;
+      }
+    } catch {
+      // Try next endpoint fallback (e.g. http if https SSL fails)
+    }
+  }
+
+  if (!responseData) {
+    return null;
+  }
+
+  const parsedData = TorobResponseSchema.safeParse(responseData);
   if (!parsedData.success || !parsedData.data.results.length) {
     return null;
   }
@@ -437,11 +459,8 @@ export async function fetchTorobPrice(query: string): Promise<ProductResult | nu
       if (result) return result;
     } catch (error: any) {
       process.stderr.write(
-        `[priceService] [Torob] Error fetching "${q}": ${error?.message || error} (status: ${error?.response?.status})\n`
+        `[priceService] [Torob] Error fetching "${q}": ${error?.message || error}\n`
       );
-      if (error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
-        break;
-      }
     }
   }
   return null;
