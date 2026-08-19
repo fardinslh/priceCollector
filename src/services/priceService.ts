@@ -1,12 +1,16 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import process from 'node:process';
 import { priceCache } from './cacheService.js';
 import {
   validateProductCandidatesWithAI,
   type CandidateProduct,
 } from './productValidator.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Product result structure representing price and availability information across Digikala and Torob.
@@ -24,7 +28,7 @@ export interface ProductResult {
 /**
  * Modern browser HTTP request configuration.
  */
-const DEFAULT_TIMEOUT_MS = 7000;
+const DEFAULT_TIMEOUT_MS = 8000;
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -51,6 +55,38 @@ const torobHeaders = {
   'Referer': 'https://torob.com/',
   'Origin': 'https://torob.com',
 };
+
+/**
+ * Executes a fast, non-blocking curl request to bypass Windows TLS/EPROTO and proxy issues on Iranian national domains.
+ */
+async function fetchJsonViaCurl(url: string, headers: Record<string, string> = {}): Promise<any> {
+  const headerArgs: string[] = [];
+  for (const [k, v] of Object.entries(headers)) {
+    headerArgs.push('-H', `${k}: ${v}`);
+  }
+  const { stdout } = await execFileAsync(
+    'curl.exe',
+    [
+      '-s',
+      '--compressed',
+      '--connect-timeout',
+      '5',
+      '--max-time',
+      '8',
+      '--resolve',
+      'api.torob.com:443:185.53.143.214',
+      ...headerArgs,
+      url,
+    ],
+    {
+      timeout: 10000,
+    }
+  );
+  if (!stdout || !stdout.trim()) {
+    throw new Error('Empty response from curl');
+  }
+  return JSON.parse(stdout);
+}
 
 /**
  * Convert English digits to Persian digits.
@@ -137,7 +173,7 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
 }
 
 /**
- * Helper to perform HTTP GET requests with custom headers, 7s timeout, and DigiCDN 307 cookie redirection support.
+ * Helper to perform HTTP GET requests with custom headers, 8s timeout, and DigiCDN 307 cookie redirection support.
  */
 async function fetchWithRedirection<T = any>(
   url: string,
@@ -318,11 +354,8 @@ export async function fetchDigikalaPrice(query: string): Promise<ProductResult |
       if (result) return result;
     } catch (error: any) {
       process.stderr.write(
-        `[priceService] [Digikala] Error fetching "${q}": ${error?.message || error} (status: ${error?.response?.status})\n`
+        `[priceService] [Digikala] Error fetching "${q}": ${error?.message || error}\n`
       );
-      if (error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
-        break;
-      }
     }
   }
   return null;
@@ -358,28 +391,33 @@ const TorobResponseSchema = z.object({
 async function fetchTorobSingleQuery(query: string): Promise<ProductResult | null> {
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://torob.com/search/?query=${encodedQuery}`;
-
-  const endpoints = [
-    `http://api.torob.com/v4/base-product/search/?q=${encodedQuery}&page=0&size=10`,
-    `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&page=0&size=10`,
-    `http://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`,
-    `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`,
-  ];
+  const apiUrl = `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&page=0&size=10`;
 
   let responseData: any = null;
 
-  for (const endpoint of endpoints) {
+  // 1. Primary: Fast, direct curl execution (bypasses Windows TLS/EPROTO issues)
+  try {
+    responseData = await fetchJsonViaCurl(apiUrl, torobHeaders);
+  } catch {
+    // 2. Fallback: Direct Axios GET
     try {
-      const response = await axios.get(endpoint, {
+      const resp = await axios.get(apiUrl, {
         headers: torobHeaders,
         timeout: DEFAULT_TIMEOUT_MS,
       });
-      if (response.data) {
-        responseData = response.data;
-        break;
-      }
+      responseData = resp.data;
     } catch {
-      // Try next endpoint fallback (e.g. http if https SSL fails)
+      // 3. Fallback: HTTP
+      try {
+        const httpUrl = `http://api.torob.com/v4/base-product/search/?q=${encodedQuery}&page=0&size=10`;
+        const resp = await axios.get(httpUrl, {
+          headers: torobHeaders,
+          timeout: DEFAULT_TIMEOUT_MS,
+        });
+        responseData = resp.data;
+      } catch {
+        // Failed
+      }
     }
   }
 
@@ -484,9 +522,13 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
     return [];
   }
 
-  // Check cache first for instant sub-second response
-  const cached = priceCache.get(normalizedQuery);
+  // Canonical cache key ensures Persian / English spacing differences hit the same cache!
+  const canonicalKey =
+    normalizeSearchQueries(normalizedQuery)[0] || normalizedQuery.toLowerCase();
+
+  const cached = priceCache.get(canonicalKey);
   if (cached && Array.isArray(cached) && cached.length === 2) {
+    process.stderr.write(`[priceService] Instant cache hit for "${canonicalKey}"\n`);
     return cached as ProductResult[];
   }
 
@@ -538,8 +580,9 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
   // Combine: Available lowest-price first, followed by out-of-stock stores
   const finalResults = [...availableStores, ...unavailableStores];
 
-  // Cache results for 15 minutes
-  priceCache.set(normalizedQuery, finalResults);
+  // Cache results under both canonical and exact query for 15 minutes
+  priceCache.set(canonicalKey, finalResults);
+  priceCache.set(normalizedQuery.toLowerCase(), finalResults);
 
   return finalResults;
 }

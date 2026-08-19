@@ -87,20 +87,22 @@ export interface AgentResponse {
  * Execute Gemini Agent with Function Calling for a text message.
  */
 export async function runShoppingAgent(userMessage: string): Promise<AgentResponse> {
+  const trimmed = userMessage.trim();
+
   try {
-    // 1. Initial call to Gemini with tools and system instruction
+    // 1. Ask Gemini to identify product name and intent
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: [
         {
           role: 'user',
-          parts: [{ text: userMessage }],
+          parts: [{ text: trimmed }],
         },
       ],
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         tools: [comparePricesTool],
-        temperature: 0.2,
+        temperature: 0.1,
       },
     });
 
@@ -108,73 +110,43 @@ export async function runShoppingAgent(userMessage: string): Promise<AgentRespon
     const firstPart = candidates?.[0]?.content?.parts?.[0];
     const functionCall = firstPart?.functionCall;
 
-    // If Gemini requested the compare_prices tool
+    // If Gemini identified product query or requested compare_prices
     if (functionCall && functionCall.name === 'compare_prices') {
       const args = functionCall.args as { query?: string };
-      const extractedQuery = (args?.query || userMessage).trim();
+      const extractedQuery = (args?.query || trimmed).trim();
 
-      // Execute cached/live price comparison across Digikala and Torob
       const priceResults = await compareAllPrices(extractedQuery);
-
-      // 2. Feed tool output back to Gemini for final Persian HTML synthesis
-      const secondResponse = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: userMessage }],
-          },
-          {
-            role: 'model',
-            parts: [{ functionCall }],
-          },
-          {
-            role: 'user',
-            parts: [
-              {
-                functionResponse: {
-                  name: 'compare_prices',
-                  response: {
-                    query: extractedQuery,
-                    comparisonResults: priceResults,
-                  },
-                },
-              },
-            ],
-          },
-        ],
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          temperature: 0.2,
-        },
-      });
-
-      const rawHtml =
-        secondResponse.text || formatComparisonFallback(extractedQuery, priceResults);
+      const htmlText = formatComparisonFallback(extractedQuery, priceResults);
 
       return {
-        htmlText: cleanHtmlOutput(rawHtml),
+        htmlText: cleanHtmlOutput(htmlText),
         products: priceResults,
         searchQuery: extractedQuery,
       };
     }
 
-    // Direct conversational reply if no product comparison tool was called
-    const directText =
-      response.text ||
-      'سلام! لطفاً نام کالا یا مدل محصول مورد نظرتان را برای استعلام و مقایسه قیمت ارسال کنید.';
+    // Direct conversational reply if query was just a greeting or question
+    if (response.text && response.text.trim()) {
+      return {
+        htmlText: cleanHtmlOutput(response.text),
+      };
+    }
+
+    // Fallback: execute direct search
+    const fallbackResults = await compareAllPrices(trimmed);
     return {
-      htmlText: cleanHtmlOutput(directText),
+      htmlText: formatComparisonFallback(trimmed, fallbackResults),
+      products: fallbackResults,
+      searchQuery: trimmed,
     };
   } catch (error: any) {
-    console.error('Agent execution error:', error?.message || error);
-    // Fallback: If Gemini API fails or rate limits, perform standard price search directly
+    console.warn('[Telegram Bot] Gemini intent recognition skipped/failed, executing direct ground-truth comparison:', error?.message || error);
     try {
-      const fallbackResults = await compareAllPrices(userMessage);
+      const fallbackResults = await compareAllPrices(trimmed);
       return {
-        htmlText: formatComparisonFallback(userMessage, fallbackResults),
+        htmlText: formatComparisonFallback(trimmed, fallbackResults),
         products: fallbackResults,
-        searchQuery: userMessage,
+        searchQuery: trimmed,
       };
     } catch {
       return {
@@ -195,7 +167,6 @@ export async function runShoppingAgentWithAudio(
     const audioPrompt =
       'Please listen to this voice message in Persian, understand what product the user wants to buy or compare prices for, and extract the clean product name to call `compare_prices`.';
 
-    // 1. Send audio directly to Gemini with tool calling enabled
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: [
@@ -217,7 +188,7 @@ export async function runShoppingAgentWithAudio(
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         tools: [comparePricesTool],
-        temperature: 0.2,
+        temperature: 0.1,
       },
     });
 
@@ -230,44 +201,10 @@ export async function runShoppingAgentWithAudio(
       const extractedQuery = (args?.query || 'کالای درخواستی').trim();
 
       const priceResults = await compareAllPrices(extractedQuery);
-
-      const secondResponse = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `کاربر در پیام صوتی این محصول را درخواست کرده بود: ${extractedQuery}` }],
-          },
-          {
-            role: 'model',
-            parts: [{ functionCall }],
-          },
-          {
-            role: 'user',
-            parts: [
-              {
-                functionResponse: {
-                  name: 'compare_prices',
-                  response: {
-                    query: extractedQuery,
-                    comparisonResults: priceResults,
-                  },
-                },
-              },
-            ],
-          },
-        ],
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          temperature: 0.2,
-        },
-      });
-
-      const rawHtml =
-        secondResponse.text || formatComparisonFallback(extractedQuery, priceResults);
+      const htmlText = formatComparisonFallback(extractedQuery, priceResults);
 
       return {
-        htmlText: cleanHtmlOutput(rawHtml),
+        htmlText: cleanHtmlOutput(htmlText),
         products: priceResults,
         searchQuery: extractedQuery,
       };
