@@ -238,10 +238,14 @@ function escapeHtml(text: string): string {
 /**
  * Generates structured Persian HTML comparison summary with strict lowest price highlight for Digikala & Torob.
  */
+/**
+ * Generates structured Persian HTML comparison summary with strict lowest price highlight across Digikala, Torob, and Zoomit.
+ */
 export function formatComparisonFallback(query: string, results: ProductResult[]): string {
   const availableItems = results.filter((r) => r.isAvailable && r.price > 0);
   const digikalaItem = results.find((r) => r.source === 'Digikala');
   const torobItem = results.find((r) => r.source === 'Torob');
+  const zoomitItem = results.find((r) => r.source === 'Zoomit');
 
   if (availableItems.length === 0) {
     return (
@@ -259,6 +263,9 @@ export function formatComparisonFallback(query: string, results: ProductResult[]
   html += `📊 <b>وضعیت قیمت‌ها:</b>\n`;
   html += `• <b>دیجی‌کالا (Digikala):</b> ${digikalaItem?.isAvailable ? `<b>${digikalaItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
   html += `• <b>ترب (Torob):</b> ${torobItem?.isAvailable ? `<b>${torobItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
+  if (zoomitItem?.isAvailable) {
+    html += `• <b>زومیت (Zoomit):</b> 📱 مشخصات و مقایسه در زومیت\n`;
+  }
 
   if (availableItems.length > 1) {
     const highest = availableItems[availableItems.length - 1];
@@ -319,6 +326,7 @@ function buildProductInlineKeyboard(
   const availableItems = products.filter((p) => p.isAvailable && p.price > 0);
   const digikalaItem = products.find((p) => p.source === 'Digikala');
   const torobItem = products.find((p) => p.source === 'Torob');
+  const zoomitItem = products.find((p) => p.source === 'Zoomit');
 
   if (availableItems.length === 0) {
     // Fallback search buttons if no products available
@@ -327,6 +335,11 @@ function buildProductInlineKeyboard(
       .url(
         '📦 جستجو در دیجی‌کالا',
         toAffiliateUrl(`https://www.digikala.com/search/?q=${encoded}`, 'Digikala')
+      )
+      .row()
+      .url(
+        '📱 جستجو در زومیت',
+        toAffiliateUrl(`https://www.zoomit.ir/product/search/${encoded}/`, 'Zoomit')
       );
     return keyboard;
   }
@@ -334,10 +347,10 @@ function buildProductInlineKeyboard(
   const cheapest = availableItems[0];
   const cheapestAffiliateUrl = toAffiliateUrl(cheapest.url, cheapest.source);
 
-  // Button 1 (Row 1): Cheapest Store primary action button
+  // Row 1: Primary action button for the cheapest store
   keyboard.url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl).row();
 
-  // Button 2 & 3 (Row 2): Direct/Search links for Digikala and Torob
+  // Row 2: Direct links for Digikala and Torob
   const digikalaUrl = digikalaItem?.url || `https://www.digikala.com/search/?q=${encoded}`;
   const torobUrl = torobItem?.url || `https://torob.com/search/?query=${encoded}`;
 
@@ -349,7 +362,12 @@ function buildProductInlineKeyboard(
     .url(
       torobItem?.isAvailable ? '🔍 ترب' : '🔍 جستجو در ترب',
       toAffiliateUrl(torobUrl, 'Torob')
-    );
+    )
+    .row();
+
+  // Row 3: Zoomit specs & review button
+  const zoomitUrl = zoomitItem?.url || `https://www.zoomit.ir/product/search/${encoded}/`;
+  keyboard.url('📱 بررسی و مشخصات در زومیت', toAffiliateUrl(zoomitUrl, 'Zoomit'));
 
   return keyboard;
 }

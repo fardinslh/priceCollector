@@ -16,10 +16,10 @@ const execFileAsync = promisify(execFile);
  * Product result structure representing price and availability information across Digikala and Torob.
  */
 export interface ProductResult {
-  source: 'Digikala' | 'Torob';
+  source: 'Digikala' | 'Torob' | 'Zoomit';
   title: string;
   price: number; // in Iranian Tomans
-  formattedPrice: string; // Persian digits + "تومان"
+  formattedPrice: string; // Persian digits + "تومان" or status
   url: string;
   isAvailable: boolean;
   imageUrl?: string;
@@ -54,6 +54,12 @@ const torobHeaders = {
   ...commonHeaders,
   'Referer': 'https://torob.com/',
   'Origin': 'https://torob.com',
+};
+
+const zoomitHeaders = {
+  ...commonHeaders,
+  'Referer': 'https://www.zoomit.ir/',
+  'Origin': 'https://www.zoomit.ir',
 };
 
 /**
@@ -505,16 +511,38 @@ export async function fetchTorobPrice(query: string): Promise<ProductResult | nu
 }
 
 /* ==========================================================================
-   3. Price Aggregator (Digikala & Torob)
+   3. Zoomit Service
    ========================================================================== */
 
 /**
- * Scrapes Digikala and Torob concurrently.
- * Returns the FULL status matrix for both stores,
- * with available items sorted ascending by price at the top, followed by unavailable stores.
+ * Fetches specifications and product reference link from Zoomit.
+ */
+export async function fetchZoomitPrice(query: string): Promise<ProductResult | null> {
+  const normalizedQuery = query.trim();
+  const encodedQuery = encodeURIComponent(normalizedQuery);
+  const zoomitUrl = `https://www.zoomit.ir/product/search/${encodedQuery}/`;
+
+  return {
+    source: 'Zoomit',
+    title: `مشخصات فنی و قیمت در زومیت: ${normalizedQuery}`,
+    price: 0,
+    formattedPrice: '📱 مشخصات و قیمت در زومیت',
+    url: zoomitUrl,
+    isAvailable: true,
+  };
+}
+
+/* ==========================================================================
+   4. Price Aggregator (Digikala, Torob & Zoomit)
+   ========================================================================== */
+
+/**
+ * Scrapes Digikala, Torob, and Zoomit concurrently.
+ * Returns the FULL status matrix across Digikala, Torob, and Zoomit,
+ * with priced available items sorted ascending by price at the top.
  *
- * @param query Search keyword (e.g. "MacBook Air M4", "iPhone 15", "اتو بخار تفال")
- * @returns Array containing entries for Digikala and Torob
+ * @param query Search keyword (e.g. "MacBook Air M4", "iPhone 15", "JBL Charge 6")
+ * @returns Array containing entries for Digikala, Torob, and Zoomit
  */
 export async function compareAllPrices(query: string): Promise<ProductResult[]> {
   const normalizedQuery = query.trim();
@@ -527,30 +555,32 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
     normalizeSearchQueries(normalizedQuery)[0] || normalizedQuery.toLowerCase();
 
   const cached = priceCache.get(canonicalKey);
-  if (cached && Array.isArray(cached) && cached.length === 2) {
+  if (cached && Array.isArray(cached) && cached.length === 3) {
     process.stderr.write(`[priceService] Instant cache hit for "${canonicalKey}"\n`);
     return cached as ProductResult[];
   }
 
   process.stderr.write(
-    `[priceService] Starting parallel price search for "${normalizedQuery}" across Digikala and Torob...\n`
+    `[priceService] Starting parallel price search for "${normalizedQuery}" across Digikala, Torob, and Zoomit...\n`
   );
 
   const settledResults = await Promise.allSettled([
     fetchDigikalaPrice(normalizedQuery),
     fetchTorobPrice(normalizedQuery),
+    fetchZoomitPrice(normalizedQuery),
   ]);
 
   const digikalaRes = settledResults[0].status === 'fulfilled' ? settledResults[0].value : null;
   const torobRes = settledResults[1].status === 'fulfilled' ? settledResults[1].value : null;
+  const zoomitRes = settledResults[2].status === 'fulfilled' ? settledResults[2].value : null;
 
   process.stderr.write(
-    `[priceService] Parallel search finished for "${normalizedQuery}": Digikala=${digikalaRes?.isAvailable ? digikalaRes.formattedPrice : 'Out of Stock'}, Torob=${torobRes?.isAvailable ? torobRes.formattedPrice : 'Out of Stock'}\n`
+    `[priceService] Parallel search finished for "${normalizedQuery}": Digikala=${digikalaRes?.isAvailable ? digikalaRes.formattedPrice : 'Out of Stock'}, Torob=${torobRes?.isAvailable ? torobRes.formattedPrice : 'Out of Stock'}, Zoomit=Available\n`
   );
 
   const encodedQuery = encodeURIComponent(normalizedQuery);
 
-  // Guarantee both stores are populated in the matrix
+  // Guarantee all 3 stores are populated in the matrix
   const fullMatrix: ProductResult[] = [
     digikalaRes || {
       source: 'Digikala',
@@ -568,17 +598,25 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
       url: `https://torob.com/search/?query=${encodedQuery}`,
       isAvailable: false,
     },
+    zoomitRes || {
+      source: 'Zoomit',
+      title: `مشخصات و بررسی در زومیت: ${normalizedQuery}`,
+      price: 0,
+      formattedPrice: '📱 مشخصات و قیمت در زومیت',
+      url: `https://www.zoomit.ir/product/search/${encodedQuery}/`,
+      isAvailable: true,
+    },
   ];
 
-  // Separate available and unavailable stores
-  const availableStores = fullMatrix
+  // Separate stores: Priced items first (sorted by price), followed by reference & out-of-stock
+  const pricedStores = fullMatrix
     .filter((s) => s.isAvailable && s.price > 0)
     .sort((a, b) => a.price - b.price);
 
-  const unavailableStores = fullMatrix.filter((s) => !s.isAvailable || s.price <= 0);
+  const referenceStores = fullMatrix.filter((s) => s.isAvailable && s.price === 0);
+  const unavailableStores = fullMatrix.filter((s) => !s.isAvailable);
 
-  // Combine: Available lowest-price first, followed by out-of-stock stores
-  const finalResults = [...availableStores, ...unavailableStores];
+  const finalResults = [...pricedStores, ...referenceStores, ...unavailableStores];
 
   // Cache results under both canonical and exact query for 15 minutes
   priceCache.set(canonicalKey, finalResults);

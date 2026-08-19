@@ -5,10 +5,13 @@ import process from 'node:process';
  * by appending tracking tags configured in environment variables.
  *
  * @param url Original store or search URL
- * @param source E-commerce store name ('Digikala' or 'Torob')
+ * @param source E-commerce store name ('Digikala', 'Torob', or 'Zoomit')
  * @returns Affiliate URL or original URL if no tag is configured / URL is invalid
  */
-export function toAffiliateUrl(url: string, source: 'Digikala' | 'Torob'): string {
+export function toAffiliateUrl(
+  url: string,
+  source: 'Digikala' | 'Torob' | 'Zoomit'
+): string {
   if (!url || typeof url !== 'string' || !url.startsWith('http')) {
     return url;
   }
@@ -33,6 +36,15 @@ export function toAffiliateUrl(url: string, source: 'Digikala' | 'Torob'): strin
           parsedUrl.searchParams.set('utm_source', 'affiliate');
           parsedUrl.searchParams.set('utm_campaign', tag);
           parsedUrl.searchParams.set('aff_id', tag);
+        }
+        break;
+      }
+
+      case 'Zoomit': {
+        const tag = process.env.ZOOMIT_AFFILIATE_TAG?.trim();
+        if (tag) {
+          parsedUrl.searchParams.set('utm_source', 'affiliate');
+          parsedUrl.searchParams.set('utm_campaign', tag);
         }
         break;
       }
