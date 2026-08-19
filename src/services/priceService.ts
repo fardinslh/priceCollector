@@ -120,60 +120,60 @@ function normalizeText(text: string): string {
 }
 
 /**
- * Multi-Query variation & transliteration dictionary for handling Persian spelling variations.
+ * Smart bilingual query normalizer that generates English and Persian query variations,
+ * prioritizing English tech model names for optimal indexing accuracy in Iranian e-commerce databases.
  */
-const KEYWORD_SYNONYMS: [RegExp, string][] = [
-  [/\bمک\s*بوک\b|\bمکبوک\b/gi, 'macbook'],
-  [/\bایرپاد\b|\bایرفون\b/gi, 'airpods'],
-  [/\bآیفون\b|\bایفون\b/gi, 'iphone'],
-  [/\bآیپد\b|\bایپد\b/gi, 'ipad'],
-  [/\bسامسونگ\b/gi, 'samsung'],
-  [/\bشیائومی\b|\bشیاومی\b/gi, 'xiaomi'],
-  [/\bپلی\s*استیشن\b|\bپلی‌استیشن\b|\bپلیستیشن\b/gi, 'playstation'],
-  [/\bاپل\s*واچ\b|\bاپلواچ\b/gi, 'apple watch'],
-  [/\bگلکسی\b/gi, 'galaxy'],
-  [/\bهندزفری\b/gi, 'handsfree'],
-  [/\bهدفون\b/gi, 'headphone'],
-  [/\bساعت\s*هوشمند\b/gi, 'smartwatch'],
-  [/\bلپ\s*تاپ\b|\bلپتاپ\b/gi, 'laptop'],
-];
+export function normalizeSearchQueries(rawQuery: string): string[] {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return [];
 
-export function getQueryVariations(query: string): string[] {
-  const trimmed = query.trim();
-  const variations = new Set<string>([trimmed]);
+  const variations = new Set<string>();
 
-  // 1. Space normalization (e.g. مکبوک -> مک بوک, لپتاپ -> لپ تاپ)
-  const spaced = trimmed
+  // 1. Generate English translation / transliteration
+  let englishQuery = trimmed
+    .replace(/(?:^|\s)(مک\s*بوک\s*پرو|مکبوک\s*پرو)(?:\s|$)/gi, ' MacBook Pro ')
+    .replace(/(?:^|\s)(مک\s*بوک\s*ایر|مکبوک\s*ایر)(?:\s|$)/gi, ' MacBook Air ')
+    .replace(/(?:^|\s)(مک\s*بوک|مکبوک)(?:\s|$)/gi, ' MacBook ')
+    .replace(/(?:^|\s)(آیفون|ایفون)(?:\s|$)/gi, ' iPhone ')
+    .replace(/(?:^|\s)(ایرپاد\s*پرو|ایرفون\s*پرو)(?:\s|$)/gi, ' AirPods Pro ')
+    .replace(/(?:^|\s)(ایرپاد|ایرفون)(?:\s|$)/gi, ' AirPods ')
+    .replace(/(?:^|\s)(آیپد\s*پرو|ایپد\s*پرو)(?:\s|$)/gi, ' iPad Pro ')
+    .replace(/(?:^|\s)(آیپد\s*ایر|ایپد\s*ایر)(?:\s|$)/gi, ' iPad Air ')
+    .replace(/(?:^|\s)(آیپد|ایپد)(?:\s|$)/gi, ' iPad ')
+    .replace(/(?:^|\s)(اپل\s*واچ\s*اولترا|اپلواچ\s*اولترا)(?:\s|$)/gi, ' Apple Watch Ultra ')
+    .replace(/(?:^|\s)(اپل\s*واچ|اپلواچ)(?:\s|$)/gi, ' Apple Watch ')
+    .replace(/(?:^|\s)(سامسونگ\s*گلکسی|سامسونگ)(?:\s|$)/gi, ' Samsung Galaxy ')
+    .replace(/(?:^|\s)(گلکسی)(?:\s|$)/gi, ' Galaxy ')
+    .replace(/(?:^|\s)(اولترا|الترا)(?:\s|$)/gi, ' Ultra ')
+    .replace(/(?:^|\s)(پرو\s*مکس)(?:\s|$)/gi, ' Pro Max ')
+    .replace(/(?:^|\s)(پرو)(?:\s|$)/gi, ' Pro ')
+    .replace(/(?:^|\s)(پلاس)(?:\s|$)/gi, ' Plus ')
+    .replace(/(?:^|\s)(شیائومی|شیاومی)(?:\s|$)/gi, ' Xiaomi ')
+    .replace(/(?:^|\s)(پلی\s*استیشن|پلی‌استیشن|پلیستیشن)(?:\s|$)/gi, ' PlayStation ')
+    .replace(/(?:^|\s)(ردمی)(?:\s|$)/gi, ' Redmi ')
+    .replace(/(?:^|\s)(پوکو)(?:\s|$)/gi, ' Poco ')
+    .replace(/(?:^|\s)(هندزفری|هدفون|گوشی)(?:\s|$)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // If an English variation was produced, place it first
+  if (englishQuery && englishQuery !== trimmed) {
+    variations.add(englishQuery);
+  }
+
+  // 2. Cleaned Persian variation (with standardized spaces)
+  const persianNormalized = trimmed
     .replace(/مکبوک/g, 'مک بوک')
     .replace(/لپتاپ/g, 'لپ تاپ')
     .replace(/ایفون/g, 'آیفون')
     .replace(/ایپد/g, 'آیپد')
     .replace(/اپلواچ/g, 'اپل واچ')
-    .replace(/پلیستیشن/g, 'پلی استیشن');
-  variations.add(spaced);
+    .replace(/پلیستیشن/g, 'پلی استیشن')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  // 2. Transliterated / English conversion
-  let englishTransliterated = trimmed;
-  for (const [regex, replacement] of KEYWORD_SYNONYMS) {
-    englishTransliterated = englishTransliterated.replace(regex, replacement);
-  }
-  if (englishTransliterated !== trimmed) {
-    variations.add(englishTransliterated.replace(/\s+/g, ' ').trim());
-  }
-
-  // 3. Persian converted if user typed english (e.g. macbook -> مک بوک, iphone -> آیفون)
-  const persianTransliterated = trimmed
-    .replace(/\bmacbook\b/gi, 'مک بوک')
-    .replace(/\bairpods\b/gi, 'ایرپاد')
-    .replace(/\biphone\b/gi, 'آیفون')
-    .replace(/\bipad\b/gi, 'آیپد')
-    .replace(/\bsamsung\b/gi, 'سامسونگ')
-    .replace(/\bxiaomi\b/gi, 'شیائومی')
-    .replace(/\bplaystation\b/gi, 'پلی استیشن')
-    .replace(/\bapple watch\b/gi, 'اپل واچ');
-  if (persianTransliterated !== trimmed) {
-    variations.add(persianTransliterated.replace(/\s+/g, ' ').trim());
-  }
+  variations.add(persianNormalized);
+  variations.add(trimmed);
 
   return Array.from(variations).filter((q) => q.length > 0);
 }
@@ -414,7 +414,11 @@ async function fetchDigikalaSingleQuery(query: string): Promise<ProductResult | 
     productUrl = selectedProduct.url.startsWith('http')
       ? selectedProduct.url
       : `https://www.digikala.com${selectedProduct.url.startsWith('/') ? '' : '/'}${selectedProduct.url}`;
-  } else if (selectedProduct.url && typeof selectedProduct.url === 'object' && selectedProduct.url.uri) {
+  } else if (
+    selectedProduct.url &&
+    typeof selectedProduct.url === 'object' &&
+    selectedProduct.url.uri
+  ) {
     productUrl = selectedProduct.url.uri.startsWith('http')
       ? selectedProduct.url.uri
       : `https://www.digikala.com${selectedProduct.url.uri.startsWith('/') ? '' : '/'}${selectedProduct.url.uri}`;
@@ -423,7 +427,9 @@ async function fetchDigikalaSingleQuery(query: string): Promise<ProductResult | 
   }
 
   const imageUrl =
-    selectedProduct.images?.main?.url?.[0] || selectedProduct.images?.main?.webp_url?.[0] || undefined;
+    selectedProduct.images?.main?.url?.[0] ||
+    selectedProduct.images?.main?.webp_url?.[0] ||
+    undefined;
 
   process.stderr.write(
     `[priceService] [Digikala] Found ${products.length} items (${relevantProducts.length} relevant), selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
@@ -441,7 +447,7 @@ async function fetchDigikalaSingleQuery(query: string): Promise<ProductResult | 
 }
 
 export async function fetchDigikalaPrice(query: string): Promise<ProductResult | null> {
-  const queryVariations = getQueryVariations(query);
+  const queryVariations = normalizeSearchQueries(query);
   for (const q of queryVariations) {
     try {
       const result = await fetchDigikalaSingleQuery(q);
@@ -485,7 +491,9 @@ const TorobResponseSchema = z.object({
 async function fetchTorobSingleQuery(query: string): Promise<ProductResult | null> {
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://torob.com/search/?query=${encodedQuery}`;
-  const apiUrl = `https://api.torob.com/v4/base-product/search/?query=${encodedQuery}&page=0&size=10`;
+  // Use both q and query parameters for full Torob search compatibility
+  const apiUrl = `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`;
+
   const response = await axios.get(apiUrl, {
     headers: torobHeaders,
     timeout: DEFAULT_TIMEOUT_MS,
@@ -505,37 +513,25 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
     );
   });
 
-  const primaryTokens = query
-    .toLowerCase()
-    .split(/[\s\-_\/]+/)
-    .filter((t) => t.length > 1);
-
-  // Filter items matching any primary keyword or title relevance
   const relevantItems = items.filter((item) => {
-    const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim().toLowerCase();
-    const matchesToken = primaryTokens.some((token) => fullTitle.includes(token));
-    return matchesToken && isRelevantProduct(fullTitle, query) && (item.price || 0) > 0;
+    const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim();
+    return isRelevantProduct(fullTitle, query) && (item.price || 0) > 0;
   });
 
-  // Pick FIRST item that is BOTH relevant and IN STOCK (price > 0 and stock_status !== 'unavailable')
+  // 1. Pick FIRST item that is BOTH relevant and IN STOCK
   let selectedItem: (typeof items)[number] | undefined =
     relevantItems.find((i) => (i.price || 0) > 0 && i.stock_status !== 'unavailable') ||
     relevantItems[0];
 
-  // Fallback: If no strict match, find any item in Torob results matching primary tokens
+  // 2. Fallback: If strict filter didn't match, pick the 1st in-stock item from Torob results
   if (!selectedItem) {
-    selectedItem = items.find((item) => {
-      const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim().toLowerCase();
-      return (
-        primaryTokens.some((token) => fullTitle.includes(token)) &&
-        (item.price || 0) > 0 &&
-        item.stock_status !== 'unavailable'
-      );
-    });
+    selectedItem = items.find(
+      (item) => (item.price || 0) > 0 && item.stock_status !== 'unavailable'
+    );
   }
 
   if (!selectedItem) {
-    process.stderr.write(`[Torob] No items matched primary tokens for "${query}"\n`);
+    process.stderr.write(`[Torob] No valid in-stock items found for "${query}"\n`);
     return null;
   }
 
@@ -570,7 +566,7 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
 }
 
 export async function fetchTorobPrice(query: string): Promise<ProductResult | null> {
-  const queryVariations = getQueryVariations(query);
+  const queryVariations = normalizeSearchQueries(query);
   for (const q of queryVariations) {
     try {
       const result = await fetchTorobSingleQuery(q);
@@ -620,45 +616,31 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://www.technolife.ir/product/search?keyword=${encodedQuery}`;
 
-  // Use plural 'products' endpoint
-  const primaryUrl = `https://www.technolife.ir/api/v1/products/search?keyword=${encodedQuery}&page=1`;
-  const fallbackApiUrl = `https://api.technolife.ir/api/v1/products/search?keyword=${encodedQuery}`;
-  const legacyApiUrl = `https://www.technolife.ir/api/product/search?keyword=${encodedQuery}`;
+  const endpoints = [
+    `https://api.technolife.ir/api/v1/search?keyword=${encodedQuery}`,
+    `https://www.technolife.ir/api/v1/products/search?keyword=${encodedQuery}`,
+    `https://api.technolife.ir/api/v1/products/search?keyword=${encodedQuery}`,
+  ];
 
   let responseData: any = null;
 
-  // Try primary API endpoint first
-  try {
-    const response = await axios.get(primaryUrl, {
-      headers: technolifeHeaders,
-      timeout: DEFAULT_TIMEOUT_MS,
-    });
-    responseData = response.data;
-  } catch (primaryErr: any) {
-    // If primary returns error, try fallback endpoints
+  for (const endpoint of endpoints) {
     try {
-      const response = await axios.get(fallbackApiUrl, {
+      const response = await axios.get(endpoint, {
         headers: technolifeHeaders,
         timeout: DEFAULT_TIMEOUT_MS,
       });
-      responseData = response.data;
-    } catch {
-      try {
-        const response = await axios.get(legacyApiUrl, {
-          headers: technolifeHeaders,
-          timeout: DEFAULT_TIMEOUT_MS,
-        });
+      if (response.data) {
         responseData = response.data;
-      } catch (fallbackErr: any) {
-        process.stderr.write(
-          `[Technolife] Search endpoint unavailable or returned 404 (status: ${primaryErr?.response?.status || fallbackErr?.response?.status || 'network error'})\n`
-        );
-        return null;
+        break;
       }
+    } catch {
+      // Continue trying fallback endpoints
     }
   }
 
   if (!responseData) {
+    process.stderr.write(`[Technolife] Unavailable\n`);
     return null;
   }
 
@@ -693,7 +675,6 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
     return isRelevantProduct(fullTitle, query);
   });
 
-  // Find FIRST product that is BOTH relevant and IN STOCK (or fallback to first item)
   const inStockProduct = relevantProducts.find((p) => {
     const rawPrice = p.price || p.selling_price || p.discounted_price || 0;
     const numPrice =
@@ -749,15 +730,13 @@ async function fetchTechnolifeSingleQuery(query: string): Promise<ProductResult 
 }
 
 export async function fetchTechnolifePrice(query: string): Promise<ProductResult | null> {
-  const queryVariations = getQueryVariations(query);
+  const queryVariations = normalizeSearchQueries(query);
   for (const q of queryVariations) {
     try {
       const result = await fetchTechnolifeSingleQuery(q);
       if (result) return result;
-    } catch (error: any) {
-      process.stderr.write(
-        `[Technolife] Search endpoint unavailable or returned 404 (status: ${error?.response?.status || error?.message})\n`
-      );
+    } catch {
+      // Endpoint unavailable
     }
   }
   return null;
