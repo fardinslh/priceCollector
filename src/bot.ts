@@ -560,15 +560,30 @@ const suggestionKeyboard = new Keyboard()
    Bot Commands and Handlers
    ========================================================================== */
 
+/**
+ * Registers the official Telegram bot menu commands.
+ */
+export async function initBotCommands(): Promise<void> {
+  try {
+    await bot.api.setMyCommands([
+      { command: 'start', description: '🚀 شروع به کار و منوی اصلی' },
+      { command: 'help', description: '📖 راهنمای استعلام و مقایسه قیمت' },
+    ]);
+    console.log('✅ Bot menu commands registered successfully.');
+  } catch (err) {
+    console.warn('[Telegram Bot] Failed to set bot commands:', err);
+  }
+}
+
 // /start Command Handler
 bot.command('start', async (ctx: Context) => {
   const welcomeMessage = `
 👋 <b>سلام! به ربات هوشمند مقایسه قیمت (مفت‌بر) خوش آمدید.</b>
 
-من دستیار هوشمند شما برای پیدا کردن بهترین و ارزان‌ترین قیمت‌ها در فروشگاه‌های معتبر ایران (<b>دیجی‌کالا</b>، <b>ترب</b> و <b>تکنولایف</b>) هستم.
+من دستیار هوشمند شما برای پیدا کردن بهترین و ارزان‌ترین قیمت‌ها در فروشگاه‌های معتبر ایران (<b>دیجی‌کالا</b>، <b>ترب</b>، <b>ایمالز</b>، <b>اسنپ‌شاپ</b> و <b>تکنولایف</b>) در تمام دسته‌بندی‌ها (دیجیتال، لوازم خانگی، پوشاک و آرایشی) هستم.
 
 🔍 <b>روش‌های استفاده:</b>
-1️⃣ <b>ارسال متن:</b> نام کالا را تایپ کنید (مثلاً: <code>آیفون 13</code> یا <code>AirPods Pro 2</code>).
+1️⃣ <b>ارسال متن:</b> نام کالا را تایپ کنید (مثلاً: <code>آیفون 13</code> یا <code>اتو بخار تفال</code>).
 2️⃣ <b>ارسال وویس:</b> نام کالا را با ویس بگویید، هوش مصنوعی سریعاً آن را تشخیص داده و قیمت‌ها را استخراج می‌کند.
 3️⃣ <b>حالت اینلاین (Inline):</b> در هر چت یا گروهی کافیست بنویسید <code>@${ctx.me?.username || 'botname'} [نام کالا]</code>.
 
@@ -592,6 +607,8 @@ bot.command('help', async (ctx: Context) => {
 4️⃣ <b>فروشگاه‌های تحت پوشش:</b>
    • دیجی‌کالا (Digikala)
    • ترب (Torob)
+   • ایمالز (Emalls)
+   • اسنپ‌شاپ (SnappShop)
    • تکنولایف (Technolife)
 
 💡 <i>نکته: قیمت‌ها در حافظه کش ۱۵ دقیقه‌ای ذخیره می‌شوند تا پاسخ‌ها فوری و زیر ثانیه ارسال شوند.</i>
@@ -610,7 +627,7 @@ bot.on('message:text', async (ctx: Context) => {
   // Handle help button from suggestion keyboard
   if (text === 'ℹ️ راهنما') {
     return ctx.reply(
-      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا یک وویس بفرستید).',
+      '📖 برای شروع، نام محصولی که می‌خواهید قیمت آن را مقایسه کنید ارسال کنید (مثلاً: <code>سامسونگ S24 Ultra</code> یا <code>اتو بخار تفال</code> یا یک وویس بفرستید).',
       { parse_mode: 'HTML' }
     );
   }
@@ -618,11 +635,33 @@ bot.on('message:text', async (ctx: Context) => {
   // Send typing chat action
   await ctx.replyWithChatAction('typing');
 
+  // Immediately send temporary loading message
+  let loadingMsg: any = null;
+  try {
+    loadingMsg = await ctx.reply(
+      '🔍 <b>در حال جستجو و مقایسه قیمت‌ها از دیجی‌کالا، ترب، ایمالز، اسنپ‌شاپ و تکنولایف...</b> ⏳',
+      { parse_mode: 'HTML' }
+    );
+  } catch {
+    // Proceed even if sending loading message failed
+  }
+
   try {
     const result = await runShoppingAgent(text);
+
+    // Delete loading message before sending final response
+    if (loadingMsg && ctx.chat?.id) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+
     await sendShoppingResponse(ctx, result);
   } catch (error: any) {
     console.error('Error handling user text message:', error?.message || error);
+
+    if (loadingMsg && ctx.chat?.id) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+
     await ctx.reply('⚠️ مشکلی در پردازش پیام شما به وجود آمد. لطفاً مجدداً امتحان کنید.', {
       parse_mode: 'HTML',
     });
@@ -636,10 +675,24 @@ bot.on('message:voice', async (ctx: Context) => {
 
   await ctx.replyWithChatAction('typing');
 
+  // Immediately send temporary loading message
+  let loadingMsg: any = null;
+  try {
+    loadingMsg = await ctx.reply(
+      '🎙️ <b>در حال پردازش پیام صوتی و استعلام هوشمند قیمت‌ها...</b> ⏳',
+      { parse_mode: 'HTML' }
+    );
+  } catch {
+    // Proceed even if sending loading message failed
+  }
+
   try {
     const file = await ctx.getFile();
 
     if (!file.file_path) {
+      if (loadingMsg && ctx.chat?.id) {
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+      }
       return ctx.reply('⚠️ دریافت فایل صوتی با مشکل مواجه شد. لطفاً متن محصول را ارسال کنید.', {
         parse_mode: 'HTML',
       });
@@ -655,9 +708,19 @@ bot.on('message:voice', async (ctx: Context) => {
     const mimeType = voice.mime_type || 'audio/ogg';
 
     const result = await runShoppingAgentWithAudio(base64Audio, mimeType);
+
+    if (loadingMsg && ctx.chat?.id) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+
     await sendShoppingResponse(ctx, result);
   } catch (error: any) {
     console.error('Error handling voice message:', error?.message || error);
+
+    if (loadingMsg && ctx.chat?.id) {
+      await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+    }
+
     await ctx.reply(
       '⚠️ در پردازش پیام صوتی شما خطایی رخ داد. لطفاً نام محصول را به صورت متنی ارسال کنید.',
       { parse_mode: 'HTML' }

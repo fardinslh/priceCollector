@@ -1,4 +1,4 @@
-import { bot } from './bot.js';
+import { bot, initBotCommands } from './bot.js';
 import process from 'node:process';
 
 /**
@@ -7,8 +7,11 @@ import process from 'node:process';
 async function bootstrap() {
   console.log('---------------------------------------------------------');
   console.log('🤖 Iranian Shopping Assistant Telegram Bot is starting...');
-  console.log('⚡ Powered by Gemini AI, GrammY, Digikala, Torob & Technolife');
+  console.log('⚡ Powered by Gemini AI, GrammY, Digikala, Torob, Emalls, SnappShop & Technolife');
   console.log('---------------------------------------------------------');
+
+  // Register official Telegram Bot menu commands
+  await initBotCommands();
 
   // Handle graceful shutdown
   const stopBot = async (signal: string) => {
