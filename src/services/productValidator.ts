@@ -182,7 +182,6 @@ export function isAccessoryProduct(title: string, query: string): boolean {
     if (q.includes(acc)) {
       return false; // User explicitly asked for the accessory
     }
-    // Strict word boundary regex
     const regex = new RegExp(`(^|[\\s\\/_–—-])${acc}($|[\\s\\/_–—-])`, 'iu');
     if (regex.test(t)) {
       return true;
@@ -246,7 +245,141 @@ export function isUsedOrFakeProduct(
 }
 
 /**
- * Enforces product series matching (e.g. Charge vs Flip vs Xtreme vs Boombox vs MacBook Pro vs Air).
+ * Enforces brand matching (e.g. iPhone/Apple vs Samsung vs Xiaomi vs Daria).
+ */
+export function matchesBrand(title: string, query: string): boolean {
+  const t = title.toLowerCase();
+  const q = query.toLowerCase();
+
+  const isAppleQuery = ['iphone', 'apple', 'آیفون', 'ایفون', 'اپل', 'مک بوک', 'مکبوک', 'macbook', 'ipad', 'آیپد'].some(
+    (k) => q.includes(k)
+  );
+  if (isAppleQuery) {
+    const nonAppleBrands = ['شیائومی', 'xiaomi', 'redmi', 'ردمی', 'poco', 'پوکو', 'سامسونگ', 'samsung', 'داریا', 'daria', 'یونیوا', 'univa'];
+    if (nonAppleBrands.some((b) => t.includes(b))) {
+      return false;
+    }
+  }
+
+  const isSamsungQuery = ['samsung', 'سامسونگ', 'galaxy', 'گلکسی'].some((k) => q.includes(k));
+  if (isSamsungQuery) {
+    const nonSamsung = ['iphone', 'آیفون', 'ایفون', 'شیائومی', 'xiaomi', 'redmi', 'ردمی', 'poco', 'پوکو', 'داریا', 'یونیوا'];
+    if (nonSamsung.some((b) => t.includes(b))) {
+      return false;
+    }
+  }
+
+  const isXiaomiQuery = ['xiaomi', 'شیائومی', 'شیاومی', 'redmi', 'ردمی', 'poco', 'پوکو'].some((k) => q.includes(k));
+  if (isXiaomiQuery) {
+    const nonXiaomi = ['iphone', 'آیفون', 'ایفون', 'سامسونگ', 'samsung', 'داریا', 'یونیوا'];
+    if (nonXiaomi.some((b) => t.includes(b))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Enforces exact sub-model and variant matching (Pro Max vs Pro vs Max vs Plus vs Ultra vs Mini vs FE vs Base).
+ */
+export function matchesSubModel(title: string, query: string): boolean {
+  const t = title.toLowerCase();
+  const q = query.toLowerCase();
+
+  const qHasPro = /(?:^|\s)(pro|پرو)(?:\s|$)/i.test(q);
+  const qHasMax = /(?:^|\s)(max|مکس)(?:\s|$)/i.test(q);
+  const qHasPlus = /(?:^|\s)(plus|پلاس)(?:\s|$)/i.test(q);
+  const qHasUltra = /(?:^|\s)(ultra|اولترا|الترا)(?:\s|$)/i.test(q);
+  const qHasMini = /(?:^|\s)(mini|مینی)(?:\s|$)/i.test(q);
+  const qHasFE = /(?:^|\s)(fe)(?:\s|$)/i.test(q);
+  const qHasAir = /(?:^|\s)(air|ایر)(?:\s|$)/i.test(q);
+
+  const tHasPro = /(?:^|\s)(pro|پرو)(?:\s|$)/i.test(t);
+  const tHasMax = /(?:^|\s)(max|مکس)(?:\s|$)/i.test(t);
+  const tHasPlus = /(?:^|\s)(plus|پلاس)(?:\s|$)/i.test(t);
+  const tHasUltra = /(?:^|\s)(ultra|اولترا|الترا)(?:\s|$)/i.test(t);
+  const tHasMini = /(?:^|\s)(mini|مینی)(?:\s|$)/i.test(t);
+  const tHasFE = /(?:^|\s)(fe)(?:\s|$)/i.test(t);
+  const tHasAir = /(?:^|\s)(air|ایر)(?:\s|$)/i.test(t);
+
+  // 1. Pro Max (both Pro and Max required)
+  if (qHasPro && qHasMax) {
+    if (!tHasPro || !tHasMax) return false;
+  } else if (qHasPro && !qHasMax) {
+    // Only Pro requested (e.g. iPhone 16 Pro) -> Candidate MUST have Pro, and MUST NOT have Max
+    if (!tHasPro || tHasMax) return false;
+  } else if (!qHasPro && qHasMax) {
+    // Only Max requested -> Candidate MUST have Max, and MUST NOT have Pro
+    if (!tHasMax || tHasPro) return false;
+  }
+
+  // 2. Plus
+  if (qHasPlus && !tHasPlus) return false;
+  if (!qHasPlus && tHasPlus) return false;
+
+  // 3. Ultra
+  if (qHasUltra && !tHasUltra) return false;
+  if (!qHasUltra && tHasUltra && (q.includes('s23') || q.includes('s24') || q.includes('s25') || q.includes('watch'))) return false;
+
+  // 4. Mini
+  if (qHasMini && !tHasMini) return false;
+  if (!qHasMini && tHasMini) return false;
+
+  // 5. FE
+  if (qHasFE && !tHasFE) return false;
+  if (!qHasFE && tHasFE) return false;
+
+  // 6. Air
+  if (qHasAir && !tHasAir) return false;
+  if (!qHasAir && tHasAir && (q.includes('macbook') || q.includes('ipad'))) return false;
+
+  // 7. Base / Standard Model check: If no modifier was in query, reject Pro / Max / Plus / Ultra / Mini / FE / Air
+  const isPhoneOrTablet = ['iphone', 'آیفون', 'ایفون', 'galaxy', 'سامسونگ', 'ipad', 'آیپد', 'xiaomi', 'redmi'].some(
+    (k) => q.includes(k)
+  );
+  if (isPhoneOrTablet && !qHasPro && !qHasMax && !qHasPlus && !qHasUltra && !qHasMini && !qHasFE && !qHasAir) {
+    if (tHasPro || tHasMax || tHasPlus || tHasUltra || tHasMini || tHasFE) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Enforces storage capacity matching (e.g. 128GB vs 256GB vs 512GB vs 1TB).
+ */
+export function matchesStorageCapacity(title: string, query: string): boolean {
+  const t = title.toLowerCase();
+  const q = query.toLowerCase();
+
+  const qCapMatch = q.match(/(?:^|\s)(64|128|256|512|1024|1tb|2tb)\s*(?:gb|گیگابایت|گیگ|g|gig|ترابایت)?(?:\s|$)/i);
+  if (qCapMatch) {
+    const cap = qCapMatch[1].toLowerCase();
+    const allCaps = ['64', '128', '256', '512', '1024', '1tb', '2tb', '۱ ترابایت', '۲ ترابایت'];
+    const otherCaps = allCaps.filter((c) => c !== cap && (cap !== '1tb' || c !== '1024') && (cap !== '1024' || c !== '1tb'));
+
+    const hasRequested =
+      t.includes(cap) ||
+      (cap === '1tb' && (t.includes('1 ترابایت') || t.includes('1tb') || t.includes('1024'))) ||
+      (cap === '256' && (t.includes('۲۵۶') || t.includes('256')));
+
+    const hasOther = otherCaps.some((other) => {
+      const regex = new RegExp(`(?:^|[\\s\\/_–—-])${other}(?:[\\s\\/_–—-]|gb|گیگ|گیگابایت|\\/|$)`, 'i');
+      return regex.test(t);
+    });
+
+    if (!hasRequested && hasOther) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Enforces product series matching (e.g. Charge vs Flip vs Xtreme vs Boombox).
  */
 export function matchesProductSeries(title: string, query: string): boolean {
   const t = title.toLowerCase();
@@ -258,31 +391,11 @@ export function matchesProductSeries(title: string, query: string): boolean {
     }
   }
 
-  // Sub-models: Pro vs Air
-  const qHasPro = /(?:^|\s)(pro|پرو)(?:\s|$)/i.test(q);
-  const qHasAir = /(?:^|\s)(air|ایر)(?:\s|$)/i.test(q);
-  const tHasPro = /(?:^|\s)(pro|پرو)(?:\s|$)/i.test(t);
-  const tHasAir = /(?:^|\s)(air|ایر)(?:\s|$)/i.test(t);
-
-  if (qHasPro && !qHasAir && tHasAir && !tHasPro) return false;
-  if (qHasAir && !qHasPro && tHasPro && !tHasAir) return false;
-
-  // Ultra vs standard
-  const qHasUltra = /(?:^|\s)(ultra|اولترا|الترا)(?:\s|$)/i.test(q);
-  const tHasUltra = /(?:^|\s)(ultra|اولترا|الترا)(?:\s|$)/i.test(t);
-  if (qHasUltra && !tHasUltra) return false;
-  if (!qHasUltra && tHasUltra && (q.includes('s23') || q.includes('s24') || q.includes('s25'))) return false;
-
-  // Plus vs regular
-  const qHasPlus = /(?:^|\s)(plus|پلاس)(?:\s|$)/i.test(q);
-  const tHasPlus = /(?:^|\s)(plus|پلاس)(?:\s|$)/i.test(t);
-  if (qHasPlus && !tHasPlus) return false;
-
   return true;
 }
 
 /**
- * Checks whether generation number / model numbers match (e.g. Charge 6 vs 5, iPhone 13 vs 14, M4 vs M5).
+ * Checks whether generation number / model numbers match (e.g. Charge 6 vs 5, iPhone 16 vs 17 vs 15, M4 vs M5).
  */
 export function matchesGenerationAndNumber(title: string, query: string): boolean {
   const t = title.toLowerCase();
@@ -319,13 +432,26 @@ export function matchesGenerationAndNumber(title: string, query: string): boolea
     }
   }
 
-  // 3. Numerical Generation (iPhone 11/12/13/14/15/16, S23/S24/S25, AirPods 2/3/4)
-  const genMatch = q.match(/(?:^|\s)(\d{2}|s\d{2})(?:\s|$)/i);
-  if (genMatch) {
-    const gen = genMatch[1].toLowerCase();
-    const regex = new RegExp(`(^|\\s|\\/|-)${gen}(\\s|\\/|-|$)`, 'i');
-    if (!regex.test(t) && !t.includes(gen)) {
-      return false;
+  // 3. iPhone / Phone Numerical Generation (iPhone 11/12/13/14/15/16/17, S23/S24/S25)
+  const isPhone = ['iphone', 'آیفون', 'ایفون', 'galaxy', 'سامسونگ'].some((k) => q.includes(k));
+  if (isPhone) {
+    const genMatch = q.match(/(?:^|\s)(\d{2}|s\d{2})(?:\s|$)/i);
+    if (genMatch) {
+      const gen = genMatch[1].toLowerCase();
+      // Candidate must contain the exact gen number
+      const regex = new RegExp(`(^|[\\s\\/_–—-])${gen}($|[\\s\\/_–—-])`, 'i');
+      if (!regex.test(t) && !t.includes(gen)) {
+        return false;
+      }
+      // Candidate must not contain a different generation number (e.g. 17 when 16 was asked, or 15 when 16 asked)
+      const allGens = ['11', '12', '13', '14', '15', '16', '17', '18'];
+      const otherGens = allGens.filter((g) => g !== gen);
+      for (const og of otherGens) {
+        const otherRegex = new RegExp(`(?:iphone|آیفون|ایفون)\\s*${og}`, 'i');
+        if (otherRegex.test(t)) {
+          return false;
+        }
+      }
     }
   }
 
@@ -372,8 +498,11 @@ export function isPriceRealistic(title: string, price: number, query: string): b
 
   // 4. Flagship Phones (iPhone, Galaxy S-series)
   const isFlagshipPhone = ['iphone', 'آیفون', 'ایفون', 's23', 's24', 's25'].some((k) => q.includes(k) || t.includes(k));
-  if (isFlagshipPhone && price < 25000000) {
-    return false;
+  if (isFlagshipPhone) {
+    if ((q.includes('16 pro max') || q.includes('۱۶ پرو مکس')) && price < 150000000) return false;
+    if ((q.includes('16 pro') || q.includes('۱۶ پرو')) && price < 130000000) return false;
+    if ((q.includes('16') || q.includes('۱۶')) && price < 90000000) return false;
+    if (price < 25000000) return false;
   }
 
   // 5. Gaming Consoles (PS5, Xbox Series X)
@@ -404,6 +533,9 @@ export function scoreCandidateProduct(
   if (isAccessoryProduct(title, query)) return 0;
   if (isCommercialAudioProduct(title, query)) return 0;
   if (isUsedOrFakeProduct(title, status, query)) return 0;
+  if (!matchesBrand(title, query)) return 0;
+  if (!matchesSubModel(title, query)) return 0;
+  if (!matchesStorageCapacity(title, query)) return 0;
   if (!matchesProductSeries(title, query)) return 0;
   if (!matchesGenerationAndNumber(title, query)) return 0;
   if (!isPriceRealistic(title, price, query)) return 0;
@@ -415,20 +547,22 @@ export function scoreCandidateProduct(
   // Exact Series match bonus
   for (const s of KNOWN_SERIES) {
     if (q.includes(s) && t.includes(s)) {
-      score += 20;
+      score += 15;
       break;
     }
   }
 
-  // Exact Chip bonus
-  const chipMatch = q.match(/(?:^|\s)(m[1-9])(?:\s|$)/i);
-  if (chipMatch) {
-    const chip = chipMatch[1].toLowerCase();
-    if (t.includes(`${chip} pro`) && !q.includes('pro')) {
-      score -= 10;
-    } else {
+  // Pro Max bonus
+  if (q.includes('pro max') || q.includes('پرو مکس')) {
+    if (t.includes('pro max') || t.includes('پرو مکس')) {
       score += 20;
     }
+  }
+
+  // Capacity match bonus
+  const qCapMatch = q.match(/(?:^|\s)(64|128|256|512|1tb|2tb)(?:\s|$)/i);
+  if (qCapMatch && t.includes(qCapMatch[1])) {
+    score += 15;
   }
 
   return Math.min(100, Math.max(0, score));
@@ -488,7 +622,7 @@ ${candidateSlice
   .map((c, i) => `[${i + 1}] Title: "${c.title}" | Price: ${c.price.toLocaleString('en-US')} Toman | Status: ${c.status || 'New'}`)
   .join('\n')}
 
-Task: Select the EXACT matching product index (1-based), strictly filtering out accessories, ceiling speakers, fakes, or wrong series/models.
+Task: Select the EXACT matching product index (1-based), strictly filtering out accessories, ceiling speakers, fakes, wrong storage capacities, or wrong sub-models (e.g. Pro vs Pro Max vs base 16).
 Return ONLY JSON: {"selectedIndex": number | null}
 `.trim();
 
@@ -514,6 +648,9 @@ Return ONLY JSON: {"selectedIndex": number | null}
             !isAccessoryProduct(aiChosen.title, query) &&
             !isCommercialAudioProduct(aiChosen.title, query) &&
             !isUsedOrFakeProduct(aiChosen.title, aiChosen.status, query) &&
+            matchesBrand(aiChosen.title, query) &&
+            matchesSubModel(aiChosen.title, query) &&
+            matchesStorageCapacity(aiChosen.title, query) &&
             matchesProductSeries(aiChosen.title, query) &&
             isPriceRealistic(aiChosen.title, aiChosen.price, query)
           ) {

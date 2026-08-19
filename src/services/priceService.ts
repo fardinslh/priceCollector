@@ -112,6 +112,66 @@ export function formatTomanPrice(price: number): string {
 }
 
 /**
+ * Noise tokens commonly appended to Iranian searches that degrade search engine recall.
+ */
+const QUERY_NOISE_TOKENS = [
+  'رجیستر شده',
+  'رجسیتر شده',
+  'رجیسترشده',
+  'رجیستر',
+  'رجسیتر',
+  'رجیستری',
+  'بدون رجیستر',
+  'رجیستر نشده',
+  'نات اکتیو',
+  'نات‌اکتیو',
+  'ناتاکتیو',
+  'نات',
+  'not active',
+  'not-active',
+  'اکتیو',
+  'active',
+  'پک اصلی',
+  'پک چین',
+  'پک ویتنام',
+  'پک هند',
+  'گارانتی دار',
+  'با گارانتی',
+  'گارانتی ۱۸ ماهه',
+  'گارانتی',
+  'شرکتی',
+  'دو سیم کارت',
+  'دوسیم کارت',
+  'دو سیمکارت',
+  'دوسیمکارت',
+  'دو سیم',
+  'دوسیم',
+  'dual sim',
+  'تک سیم کارت',
+  'تک سیمکارت',
+  'تک سیم',
+  'single sim',
+  'za/a',
+  'ch/a',
+  'lla',
+  'hn/a',
+  'اصل',
+  'اورجینال',
+];
+
+/**
+ * Strips non-identifying transaction & warranty suffixes from product queries.
+ */
+export function stripQueryNoise(rawQuery: string): string {
+  let cleaned = rawQuery;
+  for (const token of QUERY_NOISE_TOKENS) {
+    const regex = new RegExp(`(?:^|[\\s\\/_–—-])${token}(?:[\\s\\/_–—-]|$)`, 'giu');
+    cleaned = cleaned.replace(regex, ' ');
+  }
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Smart bilingual query normalizer that generates English and Persian query variations,
  * prioritizing English tech model names for optimal indexing accuracy in Iranian e-commerce databases.
  */
@@ -120,9 +180,10 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
   if (!trimmed) return [];
 
   const variations = new Set<string>();
+  const stripped = stripQueryNoise(trimmed);
 
   // 1. Generate English translation / transliteration for tech & electronics
-  let englishQuery = trimmed
+  let englishQuery = (stripped || trimmed)
     .replace(/(?:^|\s)(مک\s*بوک\s*پرو|مکبوک\s*پرو)(?:\s|$)/gi, ' MacBook Pro ')
     .replace(/(?:^|\s)(مک\s*بوک\s*ایر|مکبوک\s*ایر)(?:\s|$)/gi, ' MacBook Air ')
     .replace(/(?:^|\s)(مک\s*بوک|مکبوک)(?:\s|$)/gi, ' MacBook ')
@@ -149,6 +210,8 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
     .replace(/(?:^|\s)(بوش)(?:\s|$)/gi, ' Bosch ')
     .replace(/(?:^|\s)(براون)(?:\s|$)/gi, ' Braun ')
     .replace(/(?:^|\s)(پاناسونیک)(?:\s|$)/gi, ' Panasonic ')
+    .replace(/(?:^|\s)(گیگابایت|گیگ|gig)(?:\s|$)/gi, 'GB ')
+    .replace(/(?:^|\s)(ترابایت)(?:\s|$)/gi, 'TB ')
     .replace(/(?:^|\s)(هندزفری|هدفون|گوشی)(?:\s|$)/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -159,7 +222,7 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
   }
 
   // 2. Cleaned Persian variation (with standardized spaces)
-  const persianNormalized = trimmed
+  const persianNormalized = (stripped || trimmed)
     .replace(/مکبوک/g, 'مک بوک')
     .replace(/لپتاپ/g, 'لپ تاپ')
     .replace(/ایفون/g, 'آیفون')
@@ -173,6 +236,9 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
     .trim();
 
   variations.add(persianNormalized);
+  if (stripped && stripped !== trimmed) {
+    variations.add(stripped);
+  }
   variations.add(trimmed);
 
   return Array.from(variations).filter((q) => q.length > 0);
