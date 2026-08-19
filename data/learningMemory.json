@@ -1,0 +1,61 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2026-08-19T12:31:16.697Z",
+  "queryMappings": {
+    "مکبوک پرو m4": "MacBook Pro M4",
+    "مک بوک پرو m4": "MacBook Pro M4",
+    "ایرپاد پرو ۲": "AirPods Pro 2",
+    "ایرپاد پرو 2": "AirPods Pro 2",
+    "ایفون ۱۶ پرو مکس": "iPhone 16 Pro Max",
+    "آیفون ۱۶ پرو مکس": "iPhone 16 Pro Max",
+    "اس ۲۴ اولترا": "Samsung Galaxy S24 Ultra",
+    "اس 24 اولترا": "Samsung Galaxy S24 Ultra",
+    "jbl charge 6": "JBL Charge 6",
+    "اسپیکر چارج ۶": "JBL Charge 6"
+  },
+  "brandAliases": {
+    "اپل": "Apple",
+    "ایفون": "iPhone",
+    "آیفون": "iPhone",
+    "سامسونگ": "Samsung",
+    "شیائومی": "Xiaomi",
+    "ردمی": "Redmi",
+    "پوکو": "Poco"
+  },
+  "learnedPriceFloors": {
+    "iphone 16 pro max 256gb": {
+      "minObserved": 242000000,
+      "maxObserved": 360000000,
+      "avgObserved": 301000000,
+      "sampleCount": 2,
+      "lastUpdated": "2026-08-19T12:30:00.000Z"
+    },
+    "macbook pro m4": {
+      "minObserved": 324000000,
+      "maxObserved": 520000000,
+      "avgObserved": 386766667,
+      "sampleCount": 3,
+      "lastUpdated": "2026-08-19T12:31:15.197Z"
+    },
+    "airpods pro 2": {
+      "minObserved": 19400000,
+      "maxObserved": 30000000,
+      "avgObserved": 24500000,
+      "sampleCount": 2,
+      "lastUpdated": "2026-08-19T12:30:00.000Z"
+    },
+    "jbl charge 6": {
+      "minObserved": 21500000,
+      "maxObserved": 23000000,
+      "avgObserved": 22000000,
+      "sampleCount": 2,
+      "lastUpdated": "2026-08-19T12:30:00.000Z"
+    }
+  },
+  "learnedNegativeKeywords": [],
+  "stats": {
+    "totalQueriesProcessed": 1,
+    "successfulLearnings": 1,
+    "cacheHitAccelerations": 0
+  }
+}

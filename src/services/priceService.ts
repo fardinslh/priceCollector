@@ -1,13 +1,15 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { z } from 'zod';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import process from 'node:process';
 import { priceCache } from './cacheService.js';
+import { learningEngine } from './learningEngine.js';
 import {
   validateProductCandidatesWithAI,
   type CandidateProduct,
+  scoreCandidateProduct,
 } from './productValidator.js';
 
 const execFileAsync = promisify(execFile);
@@ -180,9 +182,20 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
   if (!trimmed) return [];
 
   const variations = new Set<string>();
-  const stripped = stripQueryNoise(trimmed);
 
-  // 1. Generate English translation / transliteration for tech & electronics
+  // 1. Check self-learned query rewrite memory first!
+  const learnedDirect = learningEngine.getLearnedCanonicalQuery(trimmed);
+  if (learnedDirect) {
+    variations.add(learnedDirect);
+  }
+
+  const stripped = stripQueryNoise(trimmed);
+  const learnedStripped = stripQueryNoise(trimmed) ? learningEngine.getLearnedCanonicalQuery(stripped) : null;
+  if (learnedStripped) {
+    variations.add(learnedStripped);
+  }
+
+  // 2. Generate English translation / transliteration for tech & electronics
   let englishQuery = (stripped || trimmed)
     .replace(/(?:^|\s)(مک\s*بوک\s*پرو|مکبوک\s*پرو)(?:\s|$)/gi, ' MacBook Pro ')
     .replace(/(?:^|\s)(مک\s*بوک\s*ایر|مکبوک\s*ایر)(?:\s|$)/gi, ' MacBook Air ')
@@ -221,7 +234,7 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
     variations.add(englishQuery);
   }
 
-  // 2. Cleaned Persian variation (with standardized spaces)
+  // 3. Cleaned Persian variation (with standardized spaces)
   const persianNormalized = (stripped || trimmed)
     .replace(/مکبوک/g, 'مک بوک')
     .replace(/لپتاپ/g, 'لپ تاپ')
@@ -687,6 +700,14 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
   // Cache results under both canonical and exact query for 15 minutes
   priceCache.set(canonicalKey, finalResults);
   priceCache.set(normalizedQuery.toLowerCase(), finalResults);
+
+  // 4. Continuous Self-Learning: Automatically update memory on every user request
+  if (pricedStores.length > 0) {
+    learningEngine.recordSuccessfulSearch(normalizedQuery, canonicalKey, finalResults);
+  } else {
+    // Non-blocking async background reflection to learn unknown slang / typos
+    learningEngine.reflectAndLearnFromFailure(normalizedQuery).catch(() => {});
+  }
 
   return finalResults;
 }

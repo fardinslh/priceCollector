@@ -1,5 +1,6 @@
 import process from 'node:process';
 import { GoogleGenAI } from '@google/genai';
+import { learningEngine } from './learningEngine.js';
 
 /**
  * Candidate item structure for product validation.
@@ -466,6 +467,13 @@ export function isPriceRealistic(title: string, price: number, query: string): b
 
   const q = query.toLowerCase();
   const t = title.toLowerCase();
+
+  // Dynamic self-learned price floor check
+  const learnedFloor =
+    learningEngine.getLearnedPriceFloor(query) || learningEngine.getLearnedPriceFloor(title);
+  if (learnedFloor && price < learnedFloor) {
+    return false;
+  }
 
   // 1. Portable Speakers (JBL Charge / Flip / Xtreme / Boombox)
   if (q.includes('charge') || q.includes('flip') || q.includes('xtreme') || q.includes('boombox')) {
