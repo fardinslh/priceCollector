@@ -53,37 +53,39 @@ const comparePricesTool = {
           query: {
             type: Type.STRING,
             description:
-              'The normalized product search term extracted from user input or voice note (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3").',
-          },
+            'The normalized product search term extracted from user input or voice note (e.g. "iPhone 13 128GB", "AirPods Pro 2", "MacBook Air M3", "اتو بخار تفال", "جاروبرقی فیلیپس").',
         },
-        required: ['query'],
       },
+      required: ['query'],
     },
-  ],
+  },
+],
 };
 
 const SYSTEM_INSTRUCTION = `
-You are an expert Persian Price Comparison Assistant (موتور مقایسه و شکار کمترین قیمت).
-Your primary objective is to find the absolute CHEAPEST deal among Digikala, Torob, and Technolife.
+You are an expert Persian Shopping & Price Comparison Assistant (موتور هوشمند مقایسه و شکار کمترین قیمت) for all product categories in Iran (لوازم خانگی، پوشاک، کالای دیجیتال، آرایشی، ابزار).
+Your primary objective is to find the absolute CHEAPEST deal among Digikala, Torob, Emalls, SnappShop, and Technolife.
 
 Rules:
 1. Always call \`compare_prices\` for product queries.
-2. When tool results return, present the COMPLETE 3-STORE STATUS MATRIX:
-   - If available products exist (at least one store has isAvailable: true):
-     🏆 <b>ارزان‌ترین پیشنهاد:</b> [فروشگاه برنده] - [قیمت به تومان]
-     
-     📊 <b>وضعیت کامل فروشگاه‌ها:</b>
-     • <b>دیجی‌کالا (Digikala):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-     • <b>ترب (Torob):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-     • <b>تکنولایف (Technolife):</b> [قیمت یا ❌ ناموجود / یافت نشد]
-     
-     (If multiple stores are available, mention the price difference / savings between the cheapest and the others).
-   - If ALL stores are unavailable (isAvailable: false):
-     Clearly state that the requested model is currently NOT available in any of the 3 stores. NEVER hallucinate or present different chipsets/models/accessories as the requested item.
+2. When tool results return, present the COMPLETE 5-STORE STATUS MATRIX:
+ - If available products exist (at least one store has isAvailable: true):
+   🏆 <b>ارزان‌ترین پیشنهاد:</b> [فروشگاه برنده] - [قیمت به تومان]
+   
+   📊 <b>وضعیت کامل فروشگاه‌ها:</b>
+   • <b>دیجی‌کالا (Digikala):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+   • <b>ترب (Torob):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+   • <b>ایمالز (Emalls):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+   • <b>اسنپ‌شاپ (SnappShop):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+   • <b>تکنولایف (Technolife):</b> [قیمت یا ❌ ناموجود / یافت نشد]
+   
+   (If multiple stores are available, mention the price difference / savings between the cheapest and the others).
+ - If ALL stores are unavailable (isAvailable: false):
+   Clearly state that the requested product/model is currently NOT available in any of the stores. NEVER hallucinate or present different models/accessories as the requested item.
 3. Format:
-   - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
-   - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
-   - Keep the tone fast, practical, and helpful.
+ - ONLY use <b>, <i>, <code>, <a> tags for Telegram.
+ - NEVER use <ul>, <ol>, <li>, <br>, <div>, or <p>. Use standard newlines (\\n) and emoji bullets (•, 🛍️, 📦, 🏆, 📊) for lists.
+ - Keep the tone fast, practical, and helpful.
 `.trim();
 
 /**
@@ -323,19 +325,21 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Generates structured Persian HTML comparison summary with strict lowest price highlight and full 3-store status matrix.
+ * Generates structured Persian HTML comparison summary with strict lowest price highlight and full 5-store status matrix.
  */
 export function formatComparisonFallback(query: string, results: ProductResult[]): string {
   const availableItems = results.filter((r) => r.isAvailable && r.price > 0);
   const digikalaItem = results.find((r) => r.source === 'Digikala');
   const torobItem = results.find((r) => r.source === 'Torob');
+  const emallsItem = results.find((r) => r.source === 'Emalls');
+  const snappShopItem = results.find((r) => r.source === 'SnappShop');
   const technolifeItem = results.find((r) => r.source === 'Technolife');
 
   if (availableItems.length === 0) {
     return (
       `🔍 <b>استعلام قیمت برای:</b> <code>${escapeHtml(query)}</code>\n\n` +
-      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در هیچ‌یک از ۳ فروشگاه معتبر (دیجی‌کالا، ترب، تکنولایف) موجود نیست یا یافت نشد.\n\n` +
-      `💡 <i>پیشنهاد: مدل مشخص‌تر یا نام لاتین دقیق کالا را ارسال کنید.</i>`
+      `❌ متأسفانه محصول مورد نظر شما در حال حاضر در فروشگاه‌های معتبر (دیجی‌کالا، ترب، ایمالز، اسنپ‌شاپ، تکنولایف) موجود نیست یا یافت نشد.\n\n` +
+      `💡 <i>پیشنهاد: مدل مشخص‌تر یا نام دقیق کالا را ارسال کنید.</i>`
     );
   }
 
@@ -347,6 +351,8 @@ export function formatComparisonFallback(query: string, results: ProductResult[]
   html += `📊 <b>وضعیت کامل فروشگاه‌ها:</b>\n`;
   html += `• <b>دیجی‌کالا (Digikala):</b> ${digikalaItem?.isAvailable ? `<b>${digikalaItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
   html += `• <b>ترب (Torob):</b> ${torobItem?.isAvailable ? `<b>${torobItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
+  html += `• <b>ایمالز (Emalls):</b> ${emallsItem?.isAvailable ? `<b>${emallsItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
+  html += `• <b>اسنپ‌شاپ (SnappShop):</b> ${snappShopItem?.isAvailable ? `<b>${snappShopItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
   html += `• <b>تکنولایف (Technolife):</b> ${technolifeItem?.isAvailable ? `<b>${technolifeItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
 
   if (availableItems.length > 1) {
@@ -396,7 +402,7 @@ export function cleanHtmlOutput(rawText: string): string {
 }
 
 /**
- * Builds interactive Telegram InlineKeyboard buttons for product search results.
+ * Builds interactive Telegram InlineKeyboard buttons for product search results (2 columns grid).
  */
 function buildProductInlineKeyboard(
   products: ProductResult[],
@@ -408,16 +414,26 @@ function buildProductInlineKeyboard(
   const availableItems = products.filter((p) => p.isAvailable && p.price > 0);
   const digikalaItem = products.find((p) => p.source === 'Digikala');
   const torobItem = products.find((p) => p.source === 'Torob');
+  const emallsItem = products.find((p) => p.source === 'Emalls');
+  const snappShopItem = products.find((p) => p.source === 'SnappShop');
   const technolifeItem = products.find((p) => p.source === 'Technolife');
 
   if (availableItems.length === 0) {
     // Fallback search buttons if no products available
     keyboard
       .url('🔍 جستجو در ترب', toAffiliateUrl(`https://torob.com/search/?query=${encoded}`, 'Torob'))
-      .row()
       .url(
         '📦 جستجو در دیجی‌کالا',
         toAffiliateUrl(`https://www.digikala.com/search/?q=${encoded}`, 'Digikala')
+      )
+      .row()
+      .url(
+        '🏷️ جستجو در ایمالز',
+        toAffiliateUrl(`https://emalls.ir/Search.aspx?query=${encoded}`, 'Emalls')
+      )
+      .url(
+        '🛍️ جستجو در اسنپ‌شاپ',
+        toAffiliateUrl(`https://snappshop.ir/search?q=${encoded}`, 'SnappShop')
       )
       .row()
       .url(
@@ -433,35 +449,47 @@ function buildProductInlineKeyboard(
   // 1. Cheapest Store primary action button
   keyboard.url(`🛒 خرید از ${cheapest.source} (بهترین قیمت)`, cheapestAffiliateUrl).row();
 
-  // 2. Individual store links
-  const secondRowButtons: { text: string; url: string }[] = [];
+  // 2. Individual store links arranged in a clean 2-column grid
+  const storeButtons: { text: string; url: string }[] = [];
 
   const digikalaUrl = digikalaItem?.url || `https://www.digikala.com/search/?q=${encoded}`;
-  secondRowButtons.push({
-    text: digikalaItem?.isAvailable ? '📦 دیجی‌کالا' : '📦 جستجو در دیجی‌کالا',
+  storeButtons.push({
+    text: digikalaItem?.isAvailable ? '📦 دیجی‌کالا' : '📦 دیجی‌کالا',
     url: toAffiliateUrl(digikalaUrl, 'Digikala'),
   });
 
   const torobUrl = torobItem?.url || `https://torob.com/search/?query=${encoded}`;
-  secondRowButtons.push({
-    text: torobItem?.isAvailable ? '🔍 ترب' : '🔍 جستجو در ترب',
+  storeButtons.push({
+    text: torobItem?.isAvailable ? '🔍 ترب' : '🔍 ترب',
     url: toAffiliateUrl(torobUrl, 'Torob'),
+  });
+
+  const emallsUrl = emallsItem?.url || `https://emalls.ir/Search.aspx?query=${encoded}`;
+  storeButtons.push({
+    text: emallsItem?.isAvailable ? '🏷️ ایمالز' : '🏷️ ایمالز',
+    url: toAffiliateUrl(emallsUrl, 'Emalls'),
+  });
+
+  const snappShopUrl = snappShopItem?.url || `https://snappshop.ir/search?q=${encoded}`;
+  storeButtons.push({
+    text: snappShopItem?.isAvailable ? '🛍️ اسنپ‌شاپ' : '🛍️ اسنپ‌شاپ',
+    url: toAffiliateUrl(snappShopUrl, 'SnappShop'),
   });
 
   const technolifeUrl =
     technolifeItem?.url || `https://www.technolife.ir/product/search?keyword=${encoded}`;
-  secondRowButtons.push({
-    text: technolifeItem?.isAvailable ? '⚡ تکنولایف' : '⚡ جستجو در تکنولایف',
+  storeButtons.push({
+    text: technolifeItem?.isAvailable ? '⚡ تکنولایف' : '⚡ تکنولایف',
     url: toAffiliateUrl(technolifeUrl, 'Technolife'),
   });
 
-  // Layout buttons cleanly
-  secondRowButtons.forEach((btn, idx) => {
-    keyboard.url(btn.text, btn.url);
-    if (idx === 1) {
-      keyboard.row();
+  for (let i = 0; i < storeButtons.length; i += 2) {
+    keyboard.url(storeButtons[i].text, storeButtons[i].url);
+    if (i + 1 < storeButtons.length) {
+      keyboard.url(storeButtons[i + 1].text, storeButtons[i + 1].url);
     }
-  });
+    keyboard.row();
+  }
 
   return keyboard;
 }

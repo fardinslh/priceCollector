@@ -31,7 +31,7 @@ function formatComparisonMarkdown(query: string, results: ProductResult[]): stri
   if (!results || results.length === 0) {
     return (
       `## 🔍 نتایج جستجو برای: "${query}"\n\n` +
-      `❌ هیچ محصول فعالی در فروشگاه‌های دیجی‌کالا، ترب و تکنولایف برای این عبارت یافت نشد.\n\n` +
+      `❌ هیچ محصول فعالی در فروشگاه‌های دیجی‌کالا، ترب، ایمالز، اسنپ‌شاپ و تکنولایف برای این عبارت یافت نشد.\n\n` +
       `> *No available products found across Iranian e-commerce platforms for query: "${query}".*`
     );
   }
@@ -101,14 +101,14 @@ async function main() {
         {
           name: 'compare_prices',
           description:
-            'Searches Digikala, Torob, and Technolife in Iran, compares real-time prices, and identifies the cheapest vendor with direct verified product links.',
+            'Searches Digikala, Torob, Emalls, SnappShop, and Technolife in Iran across all categories (electronics, home appliances, apparel, cosmetics, groceries), compares real-time prices, and identifies the cheapest vendor with direct verified product links.',
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
                 description:
-                  "Product search terms (e.g. 'iPhone 13 128GB', 'MacBook Air M3', 'AirPods Pro 2').",
+                  "Product search terms (e.g. 'iPhone 13 128GB', 'MacBook Air M3', 'اتو بخار تفال', 'جاروبرقی فیلیپس').",
               },
             },
             required: ['query'],

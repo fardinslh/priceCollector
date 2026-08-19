@@ -8,7 +8,7 @@ import { priceCache } from './cacheService.js';
  * Product result structure representing price and availability information across platforms.
  */
 export interface ProductResult {
-  source: 'Digikala' | 'Torob' | 'Technolife';
+  source: 'Digikala' | 'Torob' | 'Technolife' | 'Emalls' | 'SnappShop';
   title: string;
   price: number; // in Iranian Tomans
   formattedPrice: string; // Persian digits + "تومان"
@@ -52,6 +52,18 @@ const technolifeHeaders = {
   ...commonHeaders,
   'Referer': 'https://www.technolife.ir/',
   'Origin': 'https://www.technolife.ir',
+};
+
+const emallsHeaders = {
+  ...commonHeaders,
+  'Referer': 'https://emalls.ir/',
+  'Origin': 'https://emalls.ir',
+};
+
+const snappShopHeaders = {
+  ...commonHeaders,
+  'Referer': 'https://snappshop.ir/',
+  'Origin': 'https://snappshop.ir',
 };
 
 /**
@@ -129,7 +141,7 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
 
   const variations = new Set<string>();
 
-  // 1. Generate English translation / transliteration
+  // 1. Generate English translation / transliteration for tech & electronics
   let englishQuery = trimmed
     .replace(/(?:^|\s)(مک\s*بوک\s*پرو|مکبوک\s*پرو)(?:\s|$)/gi, ' MacBook Pro ')
     .replace(/(?:^|\s)(مک\s*بوک\s*ایر|مکبوک\s*ایر)(?:\s|$)/gi, ' MacBook Air ')
@@ -152,6 +164,11 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
     .replace(/(?:^|\s)(پلی\s*استیشن|پلی‌استیشن|پلیستیشن)(?:\s|$)/gi, ' PlayStation ')
     .replace(/(?:^|\s)(ردمی)(?:\s|$)/gi, ' Redmi ')
     .replace(/(?:^|\s)(پوکو)(?:\s|$)/gi, ' Poco ')
+    .replace(/(?:^|\s)(تفال)(?:\s|$)/gi, ' Tefal ')
+    .replace(/(?:^|\s)(فیلیپس)(?:\s|$)/gi, ' Philips ')
+    .replace(/(?:^|\s)(بوش)(?:\s|$)/gi, ' Bosch ')
+    .replace(/(?:^|\s)(براون)(?:\s|$)/gi, ' Braun ')
+    .replace(/(?:^|\s)(پاناسونیک)(?:\s|$)/gi, ' Panasonic ')
     .replace(/(?:^|\s)(هندزفری|هدفون|گوشی)(?:\s|$)/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -169,6 +186,9 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
     .replace(/ایپد/g, 'آیپد')
     .replace(/اپلواچ/g, 'اپل واچ')
     .replace(/پلیستیشن/g, 'پلی استیشن')
+    .replace(/جاروبرقی/g, 'جارو برقی')
+    .replace(/سرخکن/g, 'سرخ کن')
+    .replace(/اتوبخار/g, 'اتو بخار')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -186,6 +206,9 @@ const BRAND_FAMILY_MAP: Record<string, string[]> = {
   samsung: ['samsung', 'سامسونگ', 'galaxy', 'گلکسی'],
   xiaomi: ['xiaomi', 'شیائومی', 'شیاومی', 'redmi', 'ردمی', 'poco', 'پوکو'],
   playstation: ['playstation', 'پلی استیشن', 'پلی‌استیشن', 'ps4', 'ps5', 'sony', 'سونی'],
+  tefal: ['tefal', 'تفال'],
+  philips: ['philips', 'فیلیپس'],
+  bosch: ['bosch', 'بوش'],
 };
 
 /**
@@ -219,7 +242,7 @@ export function isRelevantProduct(title: string, query: string): boolean {
     }
   }
 
-  // 2. Brand / Product family validation (e.g. iphone must not match xiaomi t13)
+  // 2. Brand / Product family validation
   for (const [, aliases] of Object.entries(BRAND_FAMILY_MAP)) {
     const queryHasBrand = aliases.some((alias) => {
       const regex = new RegExp(`(^|\\s)${alias}(\\s|$)`, 'i');
@@ -245,7 +268,6 @@ export function isRelevantProduct(title: string, query: string): boolean {
     const requestedChip = queryChipMatch[1].toLowerCase();
     const titleChipMatch = normalizedTitle.match(chipPattern);
     if (titleChipMatch && titleChipMatch[1].toLowerCase() !== requestedChip) {
-      // Conflicting generation found in title (e.g. requested M4 but title is M3)
       return false;
     }
   }
@@ -491,7 +513,6 @@ const TorobResponseSchema = z.object({
 async function fetchTorobSingleQuery(query: string): Promise<ProductResult | null> {
   const encodedQuery = encodeURIComponent(query.trim());
   const fallbackUrl = `https://torob.com/search/?query=${encodedQuery}`;
-  // Use both q and query parameters for full Torob search compatibility
   const apiUrl = `https://api.torob.com/v4/base-product/search/?q=${encodedQuery}&query=${encodedQuery}&page=0&size=10`;
 
   const response = await axios.get(apiUrl, {
@@ -581,7 +602,347 @@ export async function fetchTorobPrice(query: string): Promise<ProductResult | nu
 }
 
 /* ==========================================================================
-   3. Technolife Service
+   3. Emalls Service
+   ========================================================================== */
+
+const EmallsProductSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  title: z.string().optional().nullable(),
+  name: z.string().optional().nullable(),
+  title_fa: z.string().optional().nullable(),
+  price: z.union([z.number(), z.string()]).optional().nullable(),
+  min_price: z.union([z.number(), z.string()]).optional().nullable(),
+  url: z.string().optional().nullable(),
+  link: z.string().optional().nullable(),
+  image: z.string().optional().nullable(),
+  image_url: z.string().optional().nullable(),
+  is_available: z.boolean().optional().nullable(),
+  in_stock: z.boolean().optional().nullable(),
+});
+
+const EmallsResponseSchema = z.object({
+  results: z.array(EmallsProductSchema).optional(),
+  data: z
+    .union([
+      z.array(EmallsProductSchema),
+      z.object({ products: z.array(EmallsProductSchema).optional() }),
+    ])
+    .optional(),
+  products: z.array(EmallsProductSchema).optional(),
+});
+
+async function fetchEmallsSingleQuery(query: string): Promise<ProductResult | null> {
+  const encodedQuery = encodeURIComponent(query.trim());
+  const fallbackUrl = `https://emalls.ir/Search.aspx?query=${encodedQuery}`;
+
+  const endpoints = [
+    `https://api.emalls.ir/api/v1/search?query=${encodedQuery}&page=1`,
+    `https://emalls.ir/api/products/search?title=${encodedQuery}`,
+  ];
+
+  let responseData: any = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await axios.get(endpoint, {
+        headers: emallsHeaders,
+        timeout: DEFAULT_TIMEOUT_MS,
+      });
+      if (response.data) {
+        responseData = response.data;
+        break;
+      }
+    } catch {
+      // Continue trying fallback endpoints
+    }
+  }
+
+  if (!responseData) {
+    process.stderr.write(`[Emalls] Unavailable\n`);
+    return null;
+  }
+
+  const parsedData = EmallsResponseSchema.safeParse(responseData);
+  if (!parsedData.success) {
+    return null;
+  }
+
+  let products: z.infer<typeof EmallsProductSchema>[] = [];
+  if (parsedData.data.results && parsedData.data.results.length > 0) {
+    products = parsedData.data.results;
+  } else if (Array.isArray(parsedData.data.data)) {
+    products = parsedData.data.data;
+  } else if (
+    parsedData.data.data &&
+    typeof parsedData.data.data === 'object' &&
+    parsedData.data.data.products
+  ) {
+    products = parsedData.data.data.products;
+  } else if (parsedData.data.products && parsedData.data.products.length > 0) {
+    products = parsedData.data.products;
+  }
+
+  if (!products.length) {
+    return null;
+  }
+
+  process.stderr.write(`[Emalls] Found ${products.length} items for "${query}"\n`);
+
+  const relevantProducts = products.filter((p) => {
+    const fullTitle = `${p.title || ''} ${p.name || ''} ${p.title_fa || ''}`.trim();
+    return isRelevantProduct(fullTitle, query);
+  });
+
+  const inStockProduct = relevantProducts.find((p) => {
+    const rawPrice = p.price || p.min_price || 0;
+    const numPrice =
+      typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0 : rawPrice;
+    return (p.is_available ?? p.in_stock ?? true) && numPrice > 0;
+  });
+
+  const selectedProduct = inStockProduct || relevantProducts[0] || products[0];
+  if (!selectedProduct) {
+    return null;
+  }
+
+  const title =
+    selectedProduct.title || selectedProduct.name || selectedProduct.title_fa || query;
+
+  const rawPrice = selectedProduct.price || selectedProduct.min_price || 0;
+  const numericPrice =
+    typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0 : rawPrice;
+
+  const priceInTomans = Math.round(numericPrice);
+  const isAvailable =
+    (selectedProduct.is_available ?? selectedProduct.in_stock ?? true) && priceInTomans > 0;
+
+  let productUrl = fallbackUrl;
+  const rawUrl = selectedProduct.url || selectedProduct.link;
+  if (rawUrl) {
+    productUrl = rawUrl.startsWith('http')
+      ? rawUrl
+      : `https://emalls.ir${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`;
+  } else if (selectedProduct.id) {
+    productUrl = `https://emalls.ir/مشخصات_کالا~${selectedProduct.id}`;
+  }
+
+  const imageUrl = selectedProduct.image_url || selectedProduct.image || undefined;
+
+  process.stderr.write(
+    `[priceService] [Emalls] Selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
+  );
+
+  return {
+    source: 'Emalls',
+    title,
+    price: priceInTomans,
+    formattedPrice: isAvailable ? formatTomanPrice(priceInTomans) : '❌ ناموجود / یافت نشد',
+    url: productUrl,
+    isAvailable,
+    imageUrl,
+  };
+}
+
+export async function fetchEmallsPrice(query: string): Promise<ProductResult | null> {
+  const queryVariations = normalizeSearchQueries(query);
+  for (const q of queryVariations) {
+    try {
+      const result = await fetchEmallsSingleQuery(q);
+      if (result) return result;
+    } catch {
+      // Endpoint unavailable
+    }
+  }
+  return null;
+}
+
+/* ==========================================================================
+   4. SnappShop Service
+   ========================================================================== */
+
+const SnappShopProductSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  title: z.string().optional().nullable(),
+  title_fa: z.string().optional().nullable(),
+  name: z.string().optional().nullable(),
+  price: z.union([z.number(), z.string()]).optional().nullable(),
+  selling_price: z.union([z.number(), z.string()]).optional().nullable(),
+  discounted_price: z.union([z.number(), z.string()]).optional().nullable(),
+  final_price: z.union([z.number(), z.string()]).optional().nullable(),
+  price_toman: z.union([z.number(), z.string()]).optional().nullable(),
+  slug: z.string().optional().nullable(),
+  url: z.string().optional().nullable(),
+  is_available: z.boolean().optional().nullable(),
+  in_stock: z.boolean().optional().nullable(),
+  image: z.string().optional().nullable(),
+  image_url: z.string().optional().nullable(),
+});
+
+const SnappShopResponseSchema = z.object({
+  results: z.array(SnappShopProductSchema).optional(),
+  data: z
+    .union([
+      z.array(SnappShopProductSchema),
+      z.object({
+        products: z.array(SnappShopProductSchema).optional(),
+        items: z.array(SnappShopProductSchema).optional(),
+      }),
+    ])
+    .optional(),
+  products: z.array(SnappShopProductSchema).optional(),
+});
+
+async function fetchSnappShopSingleQuery(query: string): Promise<ProductResult | null> {
+  const encodedQuery = encodeURIComponent(query.trim());
+  const fallbackUrl = `https://snappshop.ir/search?q=${encodedQuery}`;
+
+  const endpoints = [
+    `https://api.snappshop.ir/api/v1/search/products?query=${encodedQuery}&page=1`,
+    `https://api.snappshop.ir/api/v2/search/products?query=${encodedQuery}`,
+  ];
+
+  let responseData: any = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await axios.get(endpoint, {
+        headers: snappShopHeaders,
+        timeout: DEFAULT_TIMEOUT_MS,
+      });
+      if (response.data) {
+        responseData = response.data;
+        break;
+      }
+    } catch {
+      // Continue trying fallback endpoints
+    }
+  }
+
+  if (!responseData) {
+    process.stderr.write(`[SnappShop] Unavailable\n`);
+    return null;
+  }
+
+  const parsedData = SnappShopResponseSchema.safeParse(responseData);
+  if (!parsedData.success) {
+    return null;
+  }
+
+  let products: z.infer<typeof SnappShopProductSchema>[] = [];
+  if (parsedData.data.results && parsedData.data.results.length > 0) {
+    products = parsedData.data.results;
+  } else if (Array.isArray(parsedData.data.data)) {
+    products = parsedData.data.data;
+  } else if (
+    parsedData.data.data &&
+    typeof parsedData.data.data === 'object' &&
+    parsedData.data.data.products
+  ) {
+    products = parsedData.data.data.products;
+  } else if (
+    parsedData.data.data &&
+    typeof parsedData.data.data === 'object' &&
+    parsedData.data.data.items
+  ) {
+    products = parsedData.data.data.items;
+  } else if (parsedData.data.products && parsedData.data.products.length > 0) {
+    products = parsedData.data.products;
+  }
+
+  if (!products.length) {
+    return null;
+  }
+
+  process.stderr.write(`[SnappShop] Found ${products.length} items for "${query}"\n`);
+
+  const relevantProducts = products.filter((p) => {
+    const fullTitle = `${p.title || ''} ${p.title_fa || ''} ${p.name || ''}`.trim();
+    return isRelevantProduct(fullTitle, query);
+  });
+
+  const inStockProduct = relevantProducts.find((p) => {
+    const rawPrice =
+      p.price_toman ||
+      p.selling_price ||
+      p.discounted_price ||
+      p.final_price ||
+      p.price ||
+      0;
+    const numPrice =
+      typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0 : rawPrice;
+    return (p.is_available ?? p.in_stock ?? true) && numPrice > 0;
+  });
+
+  const selectedProduct = inStockProduct || relevantProducts[0] || products[0];
+  if (!selectedProduct) {
+    return null;
+  }
+
+  const title =
+    selectedProduct.title || selectedProduct.title_fa || selectedProduct.name || query;
+
+  const rawPrice =
+    selectedProduct.price_toman ||
+    selectedProduct.selling_price ||
+    selectedProduct.discounted_price ||
+    selectedProduct.final_price ||
+    selectedProduct.price ||
+    0;
+  let numericPrice =
+    typeof rawPrice === 'string' ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0 : rawPrice;
+
+  // Convert Rials to Tomans if not labeled as price_toman and realistic value suggests Rials
+  if (!selectedProduct.price_toman && numericPrice > 500000000) {
+    numericPrice = numericPrice / 10;
+  }
+
+  const priceInTomans = Math.round(numericPrice);
+  const isAvailable =
+    (selectedProduct.is_available ?? selectedProduct.in_stock ?? true) && priceInTomans > 0;
+
+  let productUrl = fallbackUrl;
+  if (selectedProduct.url) {
+    productUrl = selectedProduct.url.startsWith('http')
+      ? selectedProduct.url
+      : `https://snappshop.ir${selectedProduct.url.startsWith('/') ? '' : '/'}${selectedProduct.url}`;
+  } else if (selectedProduct.slug) {
+    productUrl = `https://snappshop.ir/product/${selectedProduct.slug}`;
+  } else if (selectedProduct.id) {
+    productUrl = `https://snappshop.ir/product/${selectedProduct.id}`;
+  }
+
+  const imageUrl = selectedProduct.image_url || selectedProduct.image || undefined;
+
+  process.stderr.write(
+    `[priceService] [SnappShop] Selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
+  );
+
+  return {
+    source: 'SnappShop',
+    title,
+    price: priceInTomans,
+    formattedPrice: isAvailable ? formatTomanPrice(priceInTomans) : '❌ ناموجود / یافت نشد',
+    url: productUrl,
+    isAvailable,
+    imageUrl,
+  };
+}
+
+export async function fetchSnappShopPrice(query: string): Promise<ProductResult | null> {
+  const queryVariations = normalizeSearchQueries(query);
+  for (const q of queryVariations) {
+    try {
+      const result = await fetchSnappShopSingleQuery(q);
+      if (result) return result;
+    } catch {
+      // Endpoint unavailable
+    }
+  }
+  return null;
+}
+
+/* ==========================================================================
+   5. Technolife Service
    ========================================================================== */
 
 const TechnolifeProductSchema = z.object({
@@ -743,16 +1104,17 @@ export async function fetchTechnolifePrice(query: string): Promise<ProductResult
 }
 
 /* ==========================================================================
-   4. Price Aggregator (Returns Full 3-Store Matrix)
+   6. Price Aggregator (Returns Full 5-Store Matrix)
    ========================================================================== */
 
 /**
- * Scrapes all supported Iranian e-commerce platforms concurrently.
- * Returns the FULL status matrix for all 3 stores (Digikala, Torob, Technolife),
+ * Scrapes all supported Iranian e-commerce platforms concurrently:
+ * Digikala, Torob, Emalls, SnappShop, and Technolife.
+ * Returns the FULL status matrix for all 5 stores,
  * with available items sorted ascending by price at the top, followed by unavailable stores.
  *
- * @param query Search keyword (e.g. "MacBook Air M4", "iPhone 15", "مکبوک پرو m3")
- * @returns Array containing entries for all 3 stores
+ * @param query Search keyword (e.g. "MacBook Air M4", "اتو بخار تفال", "جاروبرقی فیلیپس")
+ * @returns Array containing entries for all 5 stores
  */
 export async function compareAllPrices(query: string): Promise<ProductResult[]> {
   const normalizedQuery = query.trim();
@@ -762,31 +1124,35 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
 
   // Check cache first for instant sub-second response
   const cached = priceCache.get(normalizedQuery);
-  if (cached && Array.isArray(cached) && cached.length === 3) {
+  if (cached && Array.isArray(cached) && cached.length === 5) {
     return cached;
   }
 
   process.stderr.write(
-    `[priceService] Starting parallel price search for "${normalizedQuery}" across Digikala, Torob, and Technolife...\n`
+    `[priceService] Starting parallel price search for "${normalizedQuery}" across Digikala, Torob, Emalls, SnappShop, and Technolife...\n`
   );
 
   const settledResults = await Promise.allSettled([
     fetchDigikalaPrice(normalizedQuery),
     fetchTorobPrice(normalizedQuery),
+    fetchEmallsPrice(normalizedQuery),
+    fetchSnappShopPrice(normalizedQuery),
     fetchTechnolifePrice(normalizedQuery),
   ]);
 
   const digikalaRes = settledResults[0].status === 'fulfilled' ? settledResults[0].value : null;
   const torobRes = settledResults[1].status === 'fulfilled' ? settledResults[1].value : null;
-  const technolifeRes = settledResults[2].status === 'fulfilled' ? settledResults[2].value : null;
+  const emallsRes = settledResults[2].status === 'fulfilled' ? settledResults[2].value : null;
+  const snappShopRes = settledResults[3].status === 'fulfilled' ? settledResults[3].value : null;
+  const technolifeRes = settledResults[4].status === 'fulfilled' ? settledResults[4].value : null;
 
   process.stderr.write(
-    `[priceService] Parallel search finished for "${normalizedQuery}": Digikala=${digikalaRes?.isAvailable ? digikalaRes.formattedPrice : 'Out of Stock'}, Torob=${torobRes?.isAvailable ? torobRes.formattedPrice : 'Out of Stock'}, Technolife=${technolifeRes?.isAvailable ? technolifeRes.formattedPrice : 'Out of Stock'}\n`
+    `[priceService] Parallel search finished for "${normalizedQuery}": Digikala=${digikalaRes?.isAvailable ? digikalaRes.formattedPrice : 'Out of Stock'}, Torob=${torobRes?.isAvailable ? torobRes.formattedPrice : 'Out of Stock'}, Emalls=${emallsRes?.isAvailable ? emallsRes.formattedPrice : 'Out of Stock'}, SnappShop=${snappShopRes?.isAvailable ? snappShopRes.formattedPrice : 'Out of Stock'}, Technolife=${technolifeRes?.isAvailable ? technolifeRes.formattedPrice : 'Out of Stock'}\n`
   );
 
   const encodedQuery = encodeURIComponent(normalizedQuery);
 
-  // Guarantee all 3 stores are populated in the matrix
+  // Guarantee all 5 stores are populated in the matrix
   const fullMatrix: ProductResult[] = [
     digikalaRes || {
       source: 'Digikala',
@@ -802,6 +1168,22 @@ export async function compareAllPrices(query: string): Promise<ProductResult[]> 
       price: 0,
       formattedPrice: '❌ ناموجود / یافت نشد',
       url: `https://torob.com/search/?query=${encodedQuery}`,
+      isAvailable: false,
+    },
+    emallsRes || {
+      source: 'Emalls',
+      title: 'ناموجود / یافت نشد',
+      price: 0,
+      formattedPrice: '❌ ناموجود / یافت نشد',
+      url: `https://emalls.ir/Search.aspx?query=${encodedQuery}`,
+      isAvailable: false,
+    },
+    snappShopRes || {
+      source: 'SnappShop',
+      title: 'ناموجود / یافت نشد',
+      price: 0,
+      formattedPrice: '❌ ناموجود / یافت نشد',
+      url: `https://snappshop.ir/search?q=${encodedQuery}`,
       isAvailable: false,
     },
     technolifeRes || {
@@ -846,7 +1228,7 @@ if (isMainModule) {
 
   compareAllPrices(searchTarget)
     .then((results) => {
-      console.log(`\n📦 Status Matrix for all 3 Stores:\n`);
+      console.log(`\n📦 Status Matrix for all 5 Stores:\n`);
 
       console.table(
         results.map((r, idx) => ({
