@@ -3,6 +3,10 @@ import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { priceCache } from './cacheService.js';
+import {
+  validateProductCandidatesWithAI,
+  type CandidateProduct,
+} from './productValidator.js';
 
 /**
  * Product result structure representing price and availability information across Digikala and Torob.
@@ -63,54 +67,6 @@ export function formatTomanPrice(price: number): string {
   const formattedWithCommas = Math.round(price).toLocaleString('en-US');
   const persianDigitsWithCommas = toPersianDigits(formattedWithCommas);
   return `${persianDigitsWithCommas} تومان`;
-}
-
-/**
- * Common accessory keywords to avoid matching when searching for main devices.
- */
-const ACCESSORY_KEYWORDS = [
-  'گلس',
-  'محافظ صفحه',
-  'محافظ لنز',
-  'کاور',
-  'قاب',
-  'کیف',
-  'بند',
-  'استیکر',
-  'برچسب',
-  'شارژر',
-  'کابل',
-  'پد',
-  'پایه',
-  'هولدر',
-  'تبدیل',
-  'سلفی',
-  'اسکین',
-  'آستین',
-  'screen protector',
-  'case',
-  'cover',
-  'strap',
-  'sleeve',
-  'adapter',
-  'cable',
-  'film',
-  'skin',
-];
-
-/**
- * Normalizes Persian/Arabic characters and English terms for accurate string matching.
- */
-function normalizeText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[ي]/g, 'ی')
-    .replace(/[ك]/g, 'ک')
-    .replace(/[ة]/g, 'ه')
-    .replace(/[\u200B-\u200D\uFEFF]/g, ' ') // zero-width spaces
-    .replace(/[^a-z0-9\u0600-\u06FF\s]/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 /**
@@ -178,100 +134,6 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
   variations.add(trimmed);
 
   return Array.from(variations).filter((q) => q.length > 0);
-}
-
-const BRAND_FAMILY_MAP: Record<string, string[]> = {
-  iphone: ['iphone', 'ایفون', 'آیفون', 'apple', 'اپل'],
-  macbook: ['macbook', 'مکبوک', 'مک بوک', 'apple', 'اپل'],
-  airpods: ['airpods', 'ایرپاد', 'apple', 'اپل'],
-  ipad: ['ipad', 'ایپد', 'آیپد', 'apple', 'اپل'],
-  samsung: ['samsung', 'سامسونگ', 'galaxy', 'گلکسی'],
-  xiaomi: ['xiaomi', 'شیائومی', 'شیاومی', 'redmi', 'ردمی', 'poco', 'پوکو'],
-  playstation: ['playstation', 'پلی استیشن', 'پلی‌استیشن', 'ps4', 'ps5', 'sony', 'سونی'],
-  tefal: ['tefal', 'تفال'],
-  philips: ['philips', 'فیلیپس'],
-  bosch: ['bosch', 'بوش'],
-};
-
-/**
- * Verifies that a product title is genuinely relevant to the user query,
- * preventing accidental matching of screen protectors, wrong generations, or irrelevant accessories.
- */
-export function isRelevantProduct(title: string, query: string): boolean {
-  if (!title || !query) return false;
-
-  const normalizedTitle = normalizeText(title);
-  const normalizedQuery = normalizeText(query);
-
-  const queryTokens = normalizedQuery.split(' ').filter((t) => t.length > 1);
-  if (queryTokens.length === 0) return true;
-
-  // 1. Check if query is looking for an accessory
-  const queryWantsAccessory = ACCESSORY_KEYWORDS.some((kw) =>
-    normalizedQuery.includes(kw.toLowerCase())
-  );
-
-  // If user didn't ask for an accessory, reject titles that are accessory products
-  if (!queryWantsAccessory) {
-    const isAccessory = ACCESSORY_KEYWORDS.some((kw) => {
-      const kwLower = kw.toLowerCase();
-      const regex = new RegExp(`(^|\\s)${kwLower}(\\s|$)`, 'i');
-      return regex.test(normalizedTitle);
-    });
-
-    if (isAccessory) {
-      return false;
-    }
-  }
-
-  // 2. Brand / Product family validation
-  for (const [, aliases] of Object.entries(BRAND_FAMILY_MAP)) {
-    const queryHasBrand = aliases.some((alias) => {
-      const regex = new RegExp(`(^|\\s)${alias}(\\s|$)`, 'i');
-      return regex.test(normalizedQuery);
-    });
-
-    if (queryHasBrand) {
-      const titleHasBrand = aliases.some((alias) => {
-        const regex = new RegExp(`(^|\\s)${alias}(\\s|$)`, 'i');
-        return regex.test(normalizedTitle);
-      });
-
-      if (!titleHasBrand) {
-        return false;
-      }
-    }
-  }
-
-  // 3. Check chip / generation tags (e.g. m1, m2, m3, m4, m5)
-  const chipPattern = /(?:^|\s)(m[1-9])(?:\s|$)/i;
-  const queryChipMatch = normalizedQuery.match(chipPattern);
-  if (queryChipMatch) {
-    const requestedChip = queryChipMatch[1].toLowerCase();
-    const titleChipMatch = normalizedTitle.match(chipPattern);
-    if (titleChipMatch && titleChipMatch[1].toLowerCase() !== requestedChip) {
-      return false;
-    }
-  }
-
-  // 4. Check model number tags (e.g., iphone 13, 14, 15, 16 / s22, s23, s24)
-  const modelNumPattern = /(?:^|\s)(\d{1,2}|s\d{2})(?:\s|$)/i;
-  const queryModelMatch = normalizedQuery.match(modelNumPattern);
-  if (queryModelMatch) {
-    const requestedModel = queryModelMatch[1].toLowerCase();
-    const modelInTitleRegex = new RegExp(`(^|\\s)${requestedModel}(\\s|$)`, 'i');
-    if (!modelInTitleRegex.test(normalizedTitle)) {
-      return false;
-    }
-  }
-
-  // 5. Title must contain at least one significant query token
-  const matchedTokensCount = queryTokens.filter((token) => {
-    const regex = new RegExp(`(^|\\s)${token}(\\s|$)`, 'i');
-    return regex.test(normalizedTitle) || normalizedTitle.includes(token);
-  }).length;
-
-  return matchedTokensCount >= Math.min(queryTokens.length, 1);
 }
 
 /**
@@ -386,31 +248,29 @@ async function fetchDigikalaSingleQuery(query: string): Promise<ProductResult | 
 
   const products = parsedData.data.data.products;
 
-  // Filter relevant products that match the requested query
-  const relevantProducts = products.filter((p) => {
+  // Build candidate items for AI / semantic verification
+  const candidates: CandidateProduct[] = products.map((p) => {
     const fullTitle = `${p.title_fa || ''} ${p.title_en || ''}`.trim();
-    return isRelevantProduct(fullTitle, query);
+    const rialPrice =
+      p.default_variant?.price?.selling_price || p.default_variant?.price?.rrp_price || 0;
+    const priceInTomans = Math.round(rialPrice / 10);
+    const status = p.status === 'marketable' ? 'available' : 'unavailable';
+    return {
+      title: fullTitle,
+      price: priceInTomans,
+      status,
+      raw: p,
+    };
   });
 
-  if (relevantProducts.length === 0) {
+  const verifiedCandidate = await validateProductCandidatesWithAI(query, candidates);
+  if (!verifiedCandidate) {
     return null;
   }
 
-  // Pick first product that is BOTH relevant and IN STOCK
-  const inStockProduct = relevantProducts.find((p) => {
-    const rialPrice =
-      p.default_variant?.price?.selling_price || p.default_variant?.price?.rrp_price || 0;
-    return p.status === 'marketable' && rialPrice > 0;
-  });
-
-  const selectedProduct = inStockProduct || relevantProducts[0];
+  const selectedProduct = verifiedCandidate.raw as z.infer<typeof DigikalaProductSchema>;
   const title = selectedProduct.title_fa || selectedProduct.title_en || query;
-
-  const rialPrice =
-    selectedProduct.default_variant?.price?.selling_price ||
-    selectedProduct.default_variant?.price?.rrp_price ||
-    0;
-  const priceInTomans = Math.round(rialPrice / 10);
+  const priceInTomans = verifiedCandidate.price;
   const isAvailable = selectedProduct.status === 'marketable' && priceInTomans > 0;
 
   let productUrl = fallbackUrl;
@@ -436,7 +296,7 @@ async function fetchDigikalaSingleQuery(query: string): Promise<ProductResult | 
     undefined;
 
   process.stderr.write(
-    `[priceService] [Digikala] Found ${products.length} items (${relevantProducts.length} relevant), selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
+    `[priceService] [Digikala] Selected ${isAvailable ? 'IN-STOCK' : 'OUT-OF-STOCK'} item: "${title.slice(0, 40)}..." at ${priceInTomans} Toman\n`
   );
 
   return {
@@ -519,30 +379,28 @@ async function fetchTorobSingleQuery(query: string): Promise<ProductResult | nul
     );
   });
 
-  const relevantItems = items.filter((item) => {
-    const fullTitle = `${item.name1 || ''} ${item.name2 || ''}`.trim();
-    return isRelevantProduct(fullTitle, query) && (item.price || 0) > 0;
+  // Build candidate items for AI / semantic verification
+  const candidates: CandidateProduct[] = items.map((it) => {
+    const fullTitle = `${it.name1 || ''} ${it.name2 || ''}`.trim();
+    const priceInTomans = it.price || 0;
+    const status = it.stock_status || 'available';
+    return {
+      title: fullTitle,
+      price: priceInTomans,
+      status,
+      raw: it,
+    };
   });
 
-  // 1. Pick FIRST item that is BOTH relevant and IN STOCK
-  let selectedItem: (typeof items)[number] | undefined =
-    relevantItems.find((i) => (i.price || 0) > 0 && i.stock_status !== 'unavailable') ||
-    relevantItems[0];
-
-  // 2. Fallback: If strict filter didn't match, pick the 1st in-stock item from Torob results
-  if (!selectedItem) {
-    selectedItem = items.find(
-      (item) => (item.price || 0) > 0 && item.stock_status !== 'unavailable'
-    );
-  }
-
-  if (!selectedItem) {
-    process.stderr.write(`[Torob] No valid in-stock items found for "${query}"\n`);
+  const verifiedCandidate = await validateProductCandidatesWithAI(query, candidates);
+  if (!verifiedCandidate) {
+    process.stderr.write(`[Torob] No verified candidate found for "${query}"\n`);
     return null;
   }
 
+  const selectedItem = verifiedCandidate.raw as z.infer<typeof TorobItemSchema>;
   const title = selectedItem.name1 || selectedItem.name2 || query;
-  const priceInTomans = selectedItem.price || 0;
+  const priceInTomans = verifiedCandidate.price;
   const isAvailable = priceInTomans > 0 && selectedItem.stock_status !== 'unavailable';
 
   let productUrl = fallbackUrl;
