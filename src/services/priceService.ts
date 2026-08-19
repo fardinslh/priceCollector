@@ -632,7 +632,18 @@ export async function fetchTorobPrice(query: string): Promise<ProductResult | nu
       );
     }
   }
-  return null;
+
+  // Graceful fallback: If Torob API challenge/captcha is active, provide direct browser search link
+  const normalizedQuery = query.trim();
+  const encodedQuery = encodeURIComponent(normalizedQuery);
+  return {
+    source: 'Torob',
+    title: `مشاهده فروشگاه‌ها و قیمت‌ها در ترب: ${normalizedQuery}`,
+    price: 0,
+    formattedPrice: '🔍 استعلام قیمت در ترب',
+    url: `https://torob.com/search/?query=${encodedQuery}`,
+    isAvailable: true,
+  };
 }
 
 /* ==========================================================================

@@ -310,10 +310,10 @@ export function formatComparisonFallback(query: string, results: ProductResult[]
   html += `🏆 <b>ارزان‌ترین پیشنهاد:</b> <b>${cheapest.source}</b> با قیمت <b>${cheapest.formattedPrice}</b>\n\n`;
 
   html += `📊 <b>وضعیت قیمت‌ها:</b>\n`;
-  html += `• <b>دیجی‌کالا (Digikala):</b> ${digikalaItem?.isAvailable ? `<b>${digikalaItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
-  html += `• <b>ترب (Torob):</b> ${torobItem?.isAvailable ? `<b>${torobItem.formattedPrice}</b>` : '❌ ناموجود / یافت نشد'}\n`;
+  html += `• <b>دیجی‌کالا (Digikala):</b> ${digikalaItem?.isAvailable ? (digikalaItem.price > 0 ? `<b>${digikalaItem.formattedPrice}</b>` : '🔍 استعلام در دیجی‌کالا') : '❌ ناموجود / یافت نشد'}\n`;
+  html += `• <b>ترب (Torob):</b> ${torobItem?.isAvailable ? (torobItem.price > 0 ? `<b>${torobItem.formattedPrice}</b>` : '🔍 استعلام مستقیم در ترب') : '❌ ناموجود / یافت نشد'}\n`;
   if (zoomitItem?.isAvailable) {
-    html += `• <b>زومیت (Zoomit):</b> 📱 مشخصات و مقایسه در زومیت\n`;
+    html += `• <b>زومیت (Zoomit):</b> 📱 مشخصات و قیمت در زومیت\n`;
   }
 
   if (availableItems.length > 1) {

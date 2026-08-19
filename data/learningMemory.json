@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastUpdated": "2026-08-19T15:33:16.767Z",
+  "lastUpdated": "2026-08-19T16:04:05.089Z",
   "queryMappings": {
     "مکبوک پرو m4": "MacBook Pro M4",
     "مک بوک پرو m4": "MacBook Pro M4",
@@ -34,9 +34,9 @@
     "macbook pro m4": {
       "minObserved": 324000000,
       "maxObserved": 520000000,
-      "avgObserved": 398118000,
-      "sampleCount": 5,
-      "lastUpdated": "2026-08-19T15:18:04.941Z"
+      "avgObserved": 416096667,
+      "sampleCount": 6,
+      "lastUpdated": "2026-08-19T15:59:53.778Z"
     },
     "airpods pro 2": {
       "minObserved": 19400000,
@@ -84,14 +84,14 @@
       "minObserved": 15300000,
       "maxObserved": 15300000,
       "avgObserved": 15300000,
-      "sampleCount": 1,
-      "lastUpdated": "2026-08-19T15:33:15.258Z"
+      "sampleCount": 3,
+      "lastUpdated": "2026-08-19T16:04:03.581Z"
     }
   },
   "learnedNegativeKeywords": [],
   "stats": {
-    "totalQueriesProcessed": 11,
-    "successfulLearnings": 2,
+    "totalQueriesProcessed": 14,
+    "successfulLearnings": 4,
     "cacheHitAccelerations": 0
   }
 }
