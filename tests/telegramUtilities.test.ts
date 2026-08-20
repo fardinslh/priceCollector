@@ -7,7 +7,8 @@ test('Persian callback data stays inside Telegram byte limit', () => {
   const data = makeCallbackData(
     'alert',
     'گوشی موبایل سامسونگ گلکسی اس بیست و چهار اولترا',
-    29_678_000
+    29_678_000,
+    'گوشی موبایل سامسونگ گلکسی اس بیست و چهار اولترا 256GB'
   );
 
   assert.ok(Buffer.byteLength(data, 'utf8') <= 64);
@@ -15,6 +16,16 @@ test('Persian callback data stays inside Telegram byte limit', () => {
   assert.deepEqual(resolveCallbackData('alert', data), {
     query: 'گوشی موبایل سامسونگ گلکسی اس بیست و چهار اولترا',
     price: 29_678_000,
+    title: 'گوشی موبایل سامسونگ گلکسی اس بیست و چهار اولترا 256GB',
+  });
+});
+
+test('callback data without a title resolves without one', () => {
+  const data = makeCallbackData('chart', 'AirPods Pro 2', 28_690_000);
+  assert.deepEqual(resolveCallbackData('chart', data), {
+    query: 'AirPods Pro 2',
+    price: 28_690_000,
+    title: undefined,
   });
 });
 

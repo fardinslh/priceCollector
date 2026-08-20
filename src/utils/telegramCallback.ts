@@ -5,13 +5,19 @@ type CallbackAction = 'alert' | 'chart';
 export interface CallbackPayload {
   query: string;
   price: number;
+  title?: string;
 }
 
 const CALLBACK_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CALLBACKS = 10_000;
 const payloads = new Map<string, CallbackPayload & { action: CallbackAction; expiresAt: number }>();
 
-export function makeCallbackData(action: CallbackAction, query: string, price: number): string {
+export function makeCallbackData(
+  action: CallbackAction,
+  query: string,
+  price: number,
+  title?: string
+): string {
   if (payloads.size >= MAX_CALLBACKS) {
     const oldestKey = payloads.keys().next().value;
     if (oldestKey !== undefined) payloads.delete(oldestKey);
@@ -22,6 +28,7 @@ export function makeCallbackData(action: CallbackAction, query: string, price: n
     action,
     query: query.trim(),
     price: Math.max(0, Math.trunc(price)),
+    title,
     expiresAt: Date.now() + CALLBACK_TTL_MS,
   });
   return `${action}:${token}`;
@@ -39,7 +46,7 @@ export function resolveCallbackData(
       if (stored) payloads.delete(tokenMatch[1]);
       return null;
     }
-    return { query: stored.query, price: stored.price };
+    return { query: stored.query, price: stored.price, title: stored.title };
   }
 
   // Backward compatibility for buttons created by older releases.

@@ -15,7 +15,8 @@ export interface PriceTrendAnalysis {
 }
 
 /**
- * Generates dynamic realistic price history points based on verified observed prices.
+ * Generates ESTIMATED price history points around the current observed price.
+ * NOTE: This is an illustrative estimate, NOT real recorded price history.
  */
 export function generatePriceHistory(currentPrice: number, days = 14): PricePoint[] {
   const points: PricePoint[] = [];
@@ -41,7 +42,7 @@ export function generatePriceHistory(currentPrice: number, days = 14): PricePoin
 }
 
 /**
- * Builds a high-resolution dark-mode QuickChart.io URL representing the price history graph.
+ * Builds a high-resolution dark-mode QuickChart.io URL representing an ESTIMATED price trend.
  */
 export function generatePriceChartUrl(productTitle: string, currentPrice: number): PriceTrendAnalysis {
   const history = generatePriceHistory(currentPrice, 10);
@@ -52,14 +53,14 @@ export function generatePriceChartUrl(productTitle: string, currentPrice: number
   const maxPrice = Math.max(...history.map((h) => h.price));
 
   let trend: 'falling' | 'stable' | 'rising' = 'stable';
-  let advicePersian = '🟡 قیمت در وضعیت تعادل و پایدار قرار دارد.';
+  let advicePersian = '🟡 قیمت فعلی نسبت به بازه برآوردی در وضعیت تعادل قرار دارد (تخمینی).';
 
   if (currentPrice <= minPrice * 1.01) {
     trend = 'falling';
-    advicePersian = '🟢 <b>بهترین زمان خرید:</b> قیمت در پایین‌ترین سطح ۲ هفته اخیر قرار دارد!';
+    advicePersian = '🟢 <b>برآورد:</b> قیمت فعلی نسبت به بازه برآوردی نسبتاً پایین است (تخمینی، نه تاریخچه واقعی).';
   } else if (currentPrice >= maxPrice * 0.99) {
     trend = 'rising';
-    advicePersian = '🔴 <b>احتیاط:</b> قیمت در بالاترین سطح روزهای اخیر است؛ در صورت عدم عجله، صبر کنید.';
+    advicePersian = '🔴 <b>برآورد:</b> قیمت فعلی نسبت به بازه برآوردی نسبتاً بالاست؛ در صورت عدم عجله، صبر کنید (تخمینی).';
   }
 
   const chartConfig = {
@@ -83,7 +84,7 @@ export function generatePriceChartUrl(productTitle: string, currentPrice: number
     options: {
       title: {
         display: true,
-        text: `نمودار قیمت: ${productTitle.slice(0, 30)}`,
+        text: `نمودار تقریبی قیمت: ${productTitle.slice(0, 30)}`,
         fontColor: '#ffffff',
         fontSize: 14,
       },
