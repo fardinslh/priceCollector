@@ -1,7 +1,6 @@
 import { bot, registerBotCommands } from './bot.js';
 import process from 'node:process';
 import { alertService } from './services/alertService.js';
-import { publishTopDealToChannel } from './services/dealsPublisher.js';
 
 /**
  * Main application entry point to start the Telegram Shopping Assistant Bot.
@@ -17,14 +16,6 @@ async function bootstrap() {
 
   // Start periodic price drop alert tracker (every 60 minutes)
   alertService.startBackgroundTracker(bot, 60);
-
-  // Publish top deal to the configured channel every 6 hours (if channel is set)
-  if (process.env.TELEGRAM_DEALS_CHANNEL_ID) {
-    setInterval(() => {
-      publishTopDealToChannel(bot).catch(() => {});
-    }, 6 * 60 * 60 * 1000);
-    console.log('📢 Deal publisher enabled (interval: 6 hours).');
-  }
 
   // Handle graceful shutdown
   const stopBot = async (signal: string) => {

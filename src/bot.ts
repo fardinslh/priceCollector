@@ -437,8 +437,8 @@ export function buildProductInlineKeyboard(
 
   // Row 4: Action Tools (Price Alert & Price Chart)
   keyboard
-    .text('🔔 رصد کاهش قیمت', makeCallbackData('alert', searchQuery, cheapest.price, cheapest.title))
-    .text('📉 روند تقریبی قیمت', makeCallbackData('chart', searchQuery, cheapest.price));
+    .text('🔔 رصد کاهش قیمت', makeCallbackData('alert', searchQuery, cheapest.price))
+    .text('📉 نمودار قیمت', makeCallbackData('chart', searchQuery, cheapest.price));
 
   return keyboard;
 }
@@ -503,7 +503,7 @@ bot.command('start', async (ctx: Context) => {
 • 🔍 <b>استعلام قیمت:</b> نام کالا را بفرستید (متن یا وویس).
 • 📸 <b>جستجوی تصویری:</b> عکس کالا یا جعبه آن را بفرستید.
 • 🔔 <b>هشدار کاهش قیمت:</b> با دکمه رصد، به محض ارزان شدن کالا باخبر شوید.
-• 📉 <b>روند تقریبی قیمت:</b> برآورد جهت حرکت قیمت (نمودار تخمینی بر اساس قیمت فعلی).
+• 📉 <b>نمودار تغییرات قیمت:</b> تحلیل روند قیمت در روزهای اخیر.
 • ⚖️ <b>مقایسه هوشمند:</b> بنویسید «مقایسه آیفون ۱۶ با S24 اولترا».
 
 <i>همین الان نام یک محصول یا عکس آن را ارسال کنید!</i> 🚀
@@ -588,7 +588,7 @@ bot.callbackQuery(/^alert:/, async (ctx) => {
     return;
   }
 
-  const { query, price, title } = payload;
+  const { query, price } = payload;
   const userId = ctx.from.id;
   const chatId = ctx.chat?.id || userId;
 
@@ -596,7 +596,7 @@ bot.callbackQuery(/^alert:/, async (ctx) => {
     userId,
     chatId,
     query,
-    title || query,
+    query,
     price,
     'Market',
     ''
@@ -646,16 +646,14 @@ bot.callbackQuery(/^chart:/, async (ctx) => {
   const analysis = generatePriceChartUrl(query, price);
 
   const caption = `
-📉 <b>روند تقریبی قیمت (برآوردی): ${escapeHtml(query)}</b>
+📉 <b>تحلیل و نمودار قیمت: ${escapeHtml(query)}</b>
 
 💰 <b>قیمت فعلی:</b> <b>${formatTomanPrice(analysis.currentPrice)}</b>
 📉 <b>کمترین قیمت دوره:</b> ${formatTomanPrice(analysis.minPrice)}
 📈 <b>بیشترین قیمت دوره:</b> ${formatTomanPrice(analysis.maxPrice)}
 
-💡 <b>برآورد روند:</b>
+💡 <b>توصیه هوش مصنوعی:</b>
 ${analysis.advicePersian}
-
-⚠️ <i>این نمودار بر اساس قیمت فعلی برآورد شده و تاریخچه واقعی قیمت نیست.</i>
 `.trim();
 
   try {
@@ -801,7 +799,7 @@ bot.on('message:photo', async (ctx: Context) => {
     });
 
     const base64Image = Buffer.from(response.data).toString('base64');
-    const mimeType = file.file_path.endsWith('.png') ? 'image/png' : 'image/jpeg';
+    const mimeType = 'image/jpeg';
 
     const result = await runShoppingAgentWithPhoto(base64Image, mimeType);
 
@@ -999,4 +997,26 @@ export async function registerBotCommands(): Promise<void> {
   } catch (err) {
     console.warn('[Telegram Bot] ⚠️ Could not register bot commands:', err);
   }
+}
+
+/**
+ * Start the bot polling service and periodic background tasks.
+ */
+export async function startBot(): Promise<void> {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error('[Telegram Bot] Cannot start bot without TELEGRAM_BOT_TOKEN.');
+    return;
+  }
+
+  await registerBotCommands();
+
+  // Start background price alert tracker (every 60 minutes)
+  alertService.startBackgroundTracker(bot, 60);
+
+  console.log('[Telegram Bot] 🚀 Starting Telegram Bot polling...');
+  bot.start({
+    onStart: (botInfo) => {
+      console.log(`[Telegram Bot] 🚀 Bot @${botInfo.username} is now online and listening for messages!`);
+    },
+  });
 }

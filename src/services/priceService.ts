@@ -191,7 +191,7 @@ export function normalizeSearchQueries(rawQuery: string): string[] {
   }
 
   const stripped = stripQueryNoise(trimmed);
-  const learnedStripped = stripped ? learningEngine.getLearnedCanonicalQuery(stripped) : null;
+  const learnedStripped = stripQueryNoise(trimmed) ? learningEngine.getLearnedCanonicalQuery(stripped) : null;
   if (learnedStripped) {
     variations.add(learnedStripped);
   }
