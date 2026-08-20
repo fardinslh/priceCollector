@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import process from 'node:process';
 import { GoogleGenAI } from '@google/genai';
 import { compareAllPrices, formatTomanPrice, type ProductResult } from './priceService.js';
@@ -10,6 +11,10 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 let aiInstance: GoogleGenAI | null = null;
 if (GEMINI_API_KEY) {
   aiInstance = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 export interface ComparisonResult {
@@ -96,10 +101,10 @@ Use ONLY <b>, <i>, <code> tags. Keep under 120 words.
   }
 
   let html = `⚖️ <b>مقایسه هوشمند دو کالا:</b>\n\n`;
-  html += `1️⃣ <b>${item1Query}</b>\n`;
+  html += `1️⃣ <b>${escapeHtml(item1Query)}</b>\n`;
   html += `💰 کمترین قیمت: <b>${price1Text}</b>\n\n`;
 
-  html += `2️⃣ <b>${item2Query}</b>\n`;
+  html += `2️⃣ <b>${escapeHtml(item2Query)}</b>\n`;
   html += `💰 کمترین قیمت: <b>${price2Text}</b>\n\n`;
 
   if (aiSynthesis) {

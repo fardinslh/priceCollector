@@ -3,3 +3,6 @@ dist/
 cookies.txt
 *.log
 .env
+data/alerts.json
+data/learningMemory.json
+data/*_cookie.txt

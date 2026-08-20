@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import process from 'node:process';
 import { GoogleGenAI } from '@google/genai';
 import { learningEngine } from './learningEngine.js';
@@ -476,7 +477,9 @@ export function matchesProductSeries(title: string, query: string): boolean {
   const q = query.toLowerCase();
 
   for (const s of KNOWN_SERIES) {
-    if (q.includes(s) && !t.includes(s)) {
+    const titleHasSeries =
+      t.includes(s) || (s === 'airpods' && (t.includes('air pods') || t.includes('ایرپاد')));
+    if (q.includes(s) && !titleHasSeries) {
       return false; // Query explicitly specified series 's', but title lacks it!
     }
   }
@@ -490,6 +493,24 @@ export function matchesProductSeries(title: string, query: string): boolean {
 export function matchesGenerationAndNumber(title: string, query: string): boolean {
   const t = title.toLowerCase();
   const q = query.toLowerCase();
+
+  // AirPods generations must match explicitly. A generic "AirPods Pro" title
+  // is not sufficient for an "AirPods Pro 2" or "AirPods Pro 3" query.
+  const normalizedQuery = q.replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+  const normalizedTitle = t.replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+  const airPodsGeneration = normalizedQuery.match(
+    /(?:air\s*pods|airpods|ایرپاد)(?:\s+pro|\s+پرو)?\s*(2|3)(?:nd|rd)?\b/i
+  );
+  if (airPodsGeneration) {
+    const generation = airPodsGeneration[1];
+    const generationPattern = new RegExp(
+      `(?:air\\s*pods|airpods|ایرپاد)(?:\\s+pro|\\s+پرو)?\\s*(?:generation\\s*)?${generation}(?:nd|rd)?\\b`,
+      'i'
+    );
+    if (!generationPattern.test(normalizedTitle)) {
+      return false;
+    }
+  }
 
   // 1. Audio Model Numbers (e.g. Charge 6, Flip 7, Clip 5, Xtreme 4, Boombox 3)
   const audioSeriesMatch = q.match(/(?:charge|flip|xtreme|boombox|partybox|clip|go|pulse)\s*(\d+)/i);

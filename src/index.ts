@@ -1,4 +1,4 @@
-import { bot, registerBotCommands, startBot } from './bot.js';
+import { bot, registerBotCommands } from './bot.js';
 import process from 'node:process';
 import { alertService } from './services/alertService.js';
 

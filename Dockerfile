@@ -25,6 +25,8 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+RUN apk add --no-cache curl
+
 # Copy package metadata
 COPY package*.json ./
 

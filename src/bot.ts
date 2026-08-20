@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import { Bot, Context, InlineKeyboard, Keyboard, InlineQueryResultBuilder, GrammyError, HttpError } from 'grammy';
 import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai';
-import dotenv from 'dotenv';
 import axios from 'axios';
 import process from 'node:process';
 import { compareAllPrices, formatTomanPrice, type ProductResult } from './services/priceService.js';
@@ -8,8 +8,8 @@ import { toAffiliateUrl } from './utils/affiliate.js';
 import { alertService } from './services/alertService.js';
 import { generatePriceChartUrl } from './services/chartService.js';
 import { isComparisonQuery, parseComparisonItems, compareTwoProducts } from './services/comparisonService.js';
-
-dotenv.config();
+import { FixedWindowRateLimiter } from './utils/rateLimiter.js';
+import { makeCallbackData, resolveCallbackData } from './utils/telegramCallback.js';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
@@ -29,6 +29,32 @@ if (!GEMINI_API_KEY) {
 
 export const bot = new Bot(TELEGRAM_BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const requestLimiter = new FixedWindowRateLimiter(10, 60_000);
+
+bot.use(async (ctx, next) => {
+  const text = ctx.message?.text?.trim() || '';
+  const isExpensiveRequest =
+    Boolean(ctx.inlineQuery) ||
+    Boolean(ctx.message?.photo) ||
+    Boolean(ctx.message?.voice) ||
+    (Boolean(text) && !text.startsWith('/'));
+
+  if (!isExpensiveRequest) {
+    return next();
+  }
+
+  const requesterId = ctx.from?.id;
+  if (!requesterId || requestLimiter.consume(String(requesterId))) {
+    return next();
+  }
+
+  if (ctx.inlineQuery) {
+    await ctx.answerInlineQuery([], { cache_time: 1, is_personal: true });
+    return;
+  }
+
+  await ctx.reply('⏳ درخواست‌های شما بیش از حد سریع ارسال شده‌اند. لطفاً یک دقیقه دیگر دوباره تلاش کنید.');
+});
 
 /* ==========================================================================
    Gemini Tool Declarations & System Instructions
@@ -261,7 +287,7 @@ Return ONLY JSON: {"productQuery": "string (e.g. iPhone 16 Pro Max 256GB)"}
       if (parsed.productQuery && parsed.productQuery.length >= 2) {
         const products = await compareAllPrices(parsed.productQuery);
         return {
-          htmlText: `📸 <b>کالای شناسایی شده از تصویر:</b> <code>${parsed.productQuery}</code>\n\n${formatComparisonFallback(parsed.productQuery, products)}`,
+          htmlText: `📸 <b>کالای شناسایی شده از تصویر:</b> <code>${escapeHtml(parsed.productQuery)}</code>\n\n${formatComparisonFallback(parsed.productQuery, products)}`,
           products,
           searchQuery: parsed.productQuery,
         };
@@ -411,8 +437,8 @@ export function buildProductInlineKeyboard(
 
   // Row 4: Action Tools (Price Alert & Price Chart)
   keyboard
-    .text('🔔 رصد کاهش قیمت', `alert:${searchQuery.slice(0, 30)}:${cheapest.price}`)
-    .text('📉 نمودار قیمت', `chart:${searchQuery.slice(0, 30)}:${cheapest.price}`);
+    .text('🔔 رصد کاهش قیمت', makeCallbackData('alert', searchQuery, cheapest.price))
+    .text('📉 نمودار قیمت', makeCallbackData('chart', searchQuery, cheapest.price));
 
   return keyboard;
 }
@@ -555,12 +581,14 @@ bot.command('alerts', async (ctx: Context) => {
 });
 
 // Callback query for Price Alert Registration
-bot.callbackQuery(/^alert:(.+):(\d+)$/, async (ctx) => {
-  const match = ctx.match;
-  if (!match) return;
+bot.callbackQuery(/^alert:/, async (ctx) => {
+  const payload = resolveCallbackData('alert', ctx.callbackQuery.data);
+  if (!payload) {
+    await ctx.answerCallbackQuery({ text: '⚠️ این دکمه منقضی شده است؛ دوباره کالا را جستجو کنید.' });
+    return;
+  }
 
-  const query = match[1];
-  const price = parseInt(match[2], 10);
+  const { query, price } = payload;
   const userId = ctx.from.id;
   const chatId = ctx.chat?.id || userId;
 
@@ -604,12 +632,14 @@ bot.callbackQuery(/^del_alert:(.+)$/, async (ctx) => {
 });
 
 // Callback query for Price History Chart
-bot.callbackQuery(/^chart:(.+):(\d+)$/, async (ctx) => {
-  const match = ctx.match;
-  if (!match) return;
+bot.callbackQuery(/^chart:/, async (ctx) => {
+  const payload = resolveCallbackData('chart', ctx.callbackQuery.data);
+  if (!payload) {
+    await ctx.answerCallbackQuery({ text: '⚠️ این دکمه منقضی شده است؛ دوباره کالا را جستجو کنید.' });
+    return;
+  }
 
-  const query = match[1];
-  const price = parseInt(match[2], 10);
+  const { query, price } = payload;
 
   await ctx.answerCallbackQuery({ text: '📊 در حال تولید نمودار قیمت...' });
 
@@ -680,7 +710,7 @@ bot.on('message:text', async (ctx: Context) => {
     if (items) {
       await ctx.replyWithChatAction('typing');
       const compLoading = await ctx.reply(
-        `⚖️ <b>در حال مقایسه هوشمند "${items[0]}" با "${items[1]}"...</b> ⏳`,
+        `⚖️ <b>در حال مقایسه هوشمند "${escapeHtml(items[0])}" با "${escapeHtml(items[1])}"...</b> ⏳`,
         { parse_mode: 'HTML' }
       );
       try {

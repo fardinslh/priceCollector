@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { z } from 'zod';
 import { fileURLToPath, URL } from 'node:url';
@@ -14,6 +15,7 @@ import {
 } from './productValidator.js';
 
 const execFileAsync = promisify(execFile);
+const CURL_COMMAND = process.platform === 'win32' ? 'curl.exe' : 'curl';
 
 /**
  * Product result structure representing price and availability information across Digikala and Torob.
@@ -74,7 +76,7 @@ async function fetchJsonViaCurl(url: string, headers: Record<string, string> = {
     headerArgs.push('-H', `${k}: ${v}`);
   }
   const { stdout } = await execFileAsync(
-    'curl.exe',
+    CURL_COMMAND,
     [
       '-s',
       '--compressed',
@@ -82,8 +84,6 @@ async function fetchJsonViaCurl(url: string, headers: Record<string, string> = {
       '5',
       '--max-time',
       '8',
-      '--resolve',
-      'api.torob.com:443:185.53.143.214',
       ...headerArgs,
       url,
     ],
@@ -377,7 +377,7 @@ const DigikalaResponseSchema = z.object({
 export async function fetchDigikalaApi(apiUrl: string): Promise<any> {
   const cookiePath = path.resolve(process.cwd(), 'data/digi_cookie.txt');
   try {
-    const { stdout } = await execFileAsync('curl.exe', [
+    const { stdout } = await execFileAsync(CURL_COMMAND, [
       '-s',
       '-L',
       '--compressed',

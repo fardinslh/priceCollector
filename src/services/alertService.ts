@@ -5,6 +5,15 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { compareAllPrices, formatTomanPrice } from './priceService.js';
 import { toAffiliateUrl } from '../utils/affiliate.js';
 
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+export function hasReachedAlertTarget(alert: Pick<PriceAlert, 'initialPrice' | 'targetPrice'>, price: number): boolean {
+  const threshold = alert.targetPrice ?? alert.initialPrice;
+  return price > 0 && price <= threshold;
+}
+
 export interface PriceAlert {
   id: string;
   userId: number;
@@ -155,7 +164,7 @@ class AlertService {
           alert.lastCheckedPrice = currentCheapest.price;
 
           // Check if price dropped below lowest observed or target price
-          if (currentCheapest.price < alert.initialPrice) {
+          if (hasReachedAlertTarget(alert, currentCheapest.price)) {
             const dropAmount = alert.initialPrice - currentCheapest.price;
             const dropPercent = Math.round((dropAmount / alert.initialPrice) * 100);
 
@@ -182,7 +191,7 @@ class AlertService {
               const message = `
 🔔 <b>کاهش قیمت کالا رصد شد!</b> 📉
 
-📦 <b>کالا:</b> <code>${alert.query}</code>
+📦 <b>کالا:</b> <code>${escapeHtml(alert.query)}</code>
 🏆 <b>فروشگاه:</b> <b>${currentCheapest.source}</b>
 
 💰 <b>قیمت قبلی:</b> <s>${formatTomanPrice(alert.initialPrice)}</s>
